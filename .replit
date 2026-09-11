@@ -3,6 +3,7 @@ modules = ["nodejs-22"]
 run = "npm start"
 
 [deployment]
+build = ["npm", "install"]
 run = ["npm", "start"]
 deploymentTarget = "autoscale"
 
