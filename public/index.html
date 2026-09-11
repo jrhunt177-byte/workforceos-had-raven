@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Raven — PublishingOS Workspace</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div id="app">
+
+  <header class="topbar">
+    <button id="menuToggle" class="icon-btn" aria-label="Open menu">☰</button>
+    <div class="brand">
+      <span class="brand-name">RAVEN</span>
+      <span class="brand-sub">PublishingOS Workspace</span>
+    </div>
+    <nav class="topnav">
+      <button data-nav="home" class="nav-link">Home</button>
+      <button data-nav="books" class="nav-link">Books</button>
+    </nav>
+  </header>
+
+  <div class="shell">
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-actions">
+        <button id="newChatBtn" class="btn btn-gold">+ New Chat</button>
+        <button id="newBookBtn" class="btn btn-outline">+ New Book/Case</button>
+      </div>
+      <div class="sidebar-section-label">Chats</div>
+      <div id="threadList" class="thread-list"></div>
+    </aside>
+
+    <main id="main" class="main"></main>
+  </div>
+
+  <nav class="bottomnav">
+    <button data-nav="home" class="bottomnav-link">Home</button>
+    <button id="mobileMenuToggle" class="bottomnav-link">Chats</button>
+    <button data-nav="books" class="bottomnav-link">Books</button>
+  </nav>
+
+</div>
+
+<div id="sidebarScrim" class="sidebar-scrim"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
