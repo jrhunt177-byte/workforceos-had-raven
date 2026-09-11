@@ -17,11 +17,17 @@ db.exec(`
     number INTEGER,
     working_title TEXT NOT NULL DEFAULT '',
     region TEXT NOT NULL DEFAULT '',
+    location TEXT NOT NULL DEFAULT '',
+    date_period TEXT NOT NULL DEFAULT '',
     case_name TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'Idea',
+    research_status TEXT NOT NULL DEFAULT 'Not Started',
     research_complete INTEGER NOT NULL DEFAULT 0,
+    classification TEXT NOT NULL DEFAULT '',
     verification_status TEXT NOT NULL DEFAULT '',
     verification_date TEXT NOT NULL DEFAULT '',
+    source_notes TEXT NOT NULL DEFAULT '',
+    story_brief TEXT NOT NULL DEFAULT '',
     story_studio_url TEXT NOT NULL DEFAULT '',
     story_studio_project_id TEXT NOT NULL DEFAULT '',
     story_studio_sent INTEGER NOT NULL DEFAULT 0,
@@ -60,7 +66,29 @@ db.exec(`
   );
 `)
 
-// Seed defaults and the section-14 placeholder test record, once, on first boot only.
+// Migrate book_cases created before the research-workflow fields existed: SQLite's
+// CREATE TABLE IF NOT EXISTS leaves an already-created table's columns untouched, so
+// add any that are missing rather than requiring a fresh database file.
+const NEW_BOOK_CASE_COLUMNS = [
+  ['location', "TEXT NOT NULL DEFAULT ''"],
+  ['date_period', "TEXT NOT NULL DEFAULT ''"],
+  ['research_status', "TEXT NOT NULL DEFAULT 'Not Started'"],
+  ['classification', "TEXT NOT NULL DEFAULT ''"],
+  ['source_notes', "TEXT NOT NULL DEFAULT ''"],
+  ['story_brief', "TEXT NOT NULL DEFAULT ''"],
+]
+const existingColumns = new Set(db.prepare('PRAGMA table_info(book_cases)').all().map((c) => c.name))
+for (const [name, definition] of NEW_BOOK_CASE_COLUMNS) {
+  if (!existingColumns.has(name)) {
+    db.exec(`ALTER TABLE book_cases ADD COLUMN ${name} ${definition}`)
+  }
+}
+
+function randomId() {
+  return 'seed-' + Math.random().toString(36).slice(2, 10)
+}
+
+// Seed defaults once, on first boot only.
 const seedTs = new Date().toISOString()
 
 const settingsCount = db.prepare('SELECT COUNT(*) AS n FROM settings').get().n
@@ -86,8 +114,23 @@ if (bookCaseCount === 0) {
   `).run(randomId(), seedTs, seedTs)
 }
 
-function randomId() {
-  return 'seed-' + Math.random().toString(36).slice(2, 10)
+// The pilot is fixed at 12 books. Fill in any missing slot numbers 1-12 as empty,
+// unresearched placeholders — never inventing case content — so the Books area always
+// shows all 12 rather than however many records happen to exist.
+const takenNumbers = new Set(db.prepare('SELECT number FROM book_cases WHERE number IS NOT NULL').all().map((r) => r.number))
+const insertSlot = db.prepare(`
+  INSERT INTO book_cases (
+    id, number, working_title, region, case_name, status, research_complete,
+    verification_status, verification_date, story_studio_url, story_studio_project_id,
+    story_studio_sent, story_studio_approved, drive_folder_url, next_action, notes,
+    created_at, updated_at
+  ) VALUES (?, ?, '', '', '', 'Idea', 0, '', '', '', '', 0, 0, '', '', '', ?, ?)
+`)
+for (let n = 1; n <= 12; n++) {
+  if (!takenNumbers.has(n)) {
+    const ts = new Date().toISOString()
+    insertSlot.run(randomId(), n, ts, ts)
+  }
 }
 
 export default db

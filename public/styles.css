@@ -254,6 +254,7 @@ button, input, textarea, select {
   white-space: nowrap;
 }
 .badge-muted { border-color: var(--border); color: var(--text-muted); background: transparent; }
+.badge-outline { border-color: var(--border); color: var(--text); background: transparent; }
 
 .muted { color: var(--text-muted); }
 .link { color: var(--gold); text-decoration: none; }
@@ -288,6 +289,8 @@ button, input, textarea, select {
 .book-card:hover { border-color: var(--gold-dim); }
 .book-card .b-title { font-weight: 600; }
 .book-card .b-meta { color: var(--text-muted); font-size: 0.8rem; margin-top: 4px; }
+.book-card-empty { border-style: dashed; opacity: 0.75; }
+.book-card-empty .b-title { color: var(--text-muted); font-weight: 500; }
 
 /* ---- chat view ---- */
 

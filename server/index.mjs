@@ -18,6 +18,9 @@ const TAGS = [
   'Book / Case Research', 'Story Studio Prep', 'Publishing Package',
   'HAD Content', 'General Raven Ops',
 ]
+const RESEARCH_STATUSES = ['Not Started', 'Researching', 'Complete']
+const CLASSIFICATIONS = ['Confirmed', 'Reported', 'Disputed', 'Theory']
+const ASSIGNMENT = 'Research and develop 12 Midwest unsolved mysteries for the Hunt After Dark / PublishingOS pilot. For each candidate, establish the material facts, maintain sources and a verification date, and prepare a concise Story Studio-ready synopsis. Core factual accuracy matters; do not waste production time resolving immaterial discrepancies that do not change the story.'
 
 const app = express()
 app.use(express.json({ limit: '1mb' }))
@@ -35,11 +38,17 @@ function serializeBookCase(row) {
     number: row.number,
     workingTitle: row.working_title,
     region: row.region,
+    location: row.location,
+    datePeriod: row.date_period,
     caseName: row.case_name,
     status: row.status,
+    researchStatus: row.research_status,
     researchComplete: !!row.research_complete,
+    classification: row.classification,
     verificationStatus: row.verification_status,
     verificationDate: row.verification_date,
+    sourceNotes: row.source_notes,
+    storyBrief: row.story_brief,
     storyStudioUrl: row.story_studio_url,
     storyStudioProjectId: row.story_studio_project_id,
     storyStudioSent: !!row.story_studio_sent,
@@ -67,12 +76,14 @@ app.post('/api/book-cases', (req, res) => {
   const ts = now()
   db.prepare(`
     INSERT INTO book_cases (
-      id, number, working_title, region, case_name, status, research_complete,
-      verification_status, verification_date, story_studio_url, story_studio_project_id,
+      id, number, working_title, region, location, date_period, case_name, status,
+      research_status, research_complete, classification, verification_status, verification_date,
+      source_notes, story_brief, story_studio_url, story_studio_project_id,
       story_studio_sent, story_studio_approved, drive_folder_url, next_action, notes,
       created_at, updated_at
-    ) VALUES (@id, @number, @workingTitle, @region, @caseName, @status, @researchComplete,
-      @verificationStatus, @verificationDate, @storyStudioUrl, @storyStudioProjectId,
+    ) VALUES (@id, @number, @workingTitle, @region, @location, @datePeriod, @caseName, @status,
+      @researchStatus, @researchComplete, @classification, @verificationStatus, @verificationDate,
+      @sourceNotes, @storyBrief, @storyStudioUrl, @storyStudioProjectId,
       @storyStudioSent, @storyStudioApproved, @driveFolderUrl, @nextAction, @notes,
       @createdAt, @updatedAt)
   `).run({
@@ -80,11 +91,17 @@ app.post('/api/book-cases', (req, res) => {
     number: b.number ?? null,
     workingTitle: b.workingTitle || '',
     region: b.region || '',
+    location: b.location || '',
+    datePeriod: b.datePeriod || '',
     caseName: b.caseName || '',
     status: STATUSES.includes(b.status) ? b.status : 'Idea',
+    researchStatus: RESEARCH_STATUSES.includes(b.researchStatus) ? b.researchStatus : 'Not Started',
     researchComplete: b.researchComplete ? 1 : 0,
+    classification: CLASSIFICATIONS.includes(b.classification) ? b.classification : '',
     verificationStatus: b.verificationStatus || '',
     verificationDate: b.verificationDate || '',
+    sourceNotes: b.sourceNotes || '',
+    storyBrief: b.storyBrief || '',
     storyStudioUrl: b.storyStudioUrl || '',
     storyStudioProjectId: b.storyStudioProjectId || '',
     storyStudioSent: b.storyStudioSent ? 1 : 0,
@@ -99,9 +116,12 @@ app.post('/api/book-cases', (req, res) => {
 })
 
 const BOOK_CASE_FIELD_MAP = {
-  number: 'number', workingTitle: 'working_title', region: 'region', caseName: 'case_name',
-  status: 'status', researchComplete: 'research_complete', verificationStatus: 'verification_status',
-  verificationDate: 'verification_date', storyStudioUrl: 'story_studio_url',
+  number: 'number', workingTitle: 'working_title', region: 'region', location: 'location',
+  datePeriod: 'date_period', caseName: 'case_name',
+  status: 'status', researchStatus: 'research_status', researchComplete: 'research_complete',
+  classification: 'classification', verificationStatus: 'verification_status',
+  verificationDate: 'verification_date', sourceNotes: 'source_notes', storyBrief: 'story_brief',
+  storyStudioUrl: 'story_studio_url',
   storyStudioProjectId: 'story_studio_project_id', storyStudioSent: 'story_studio_sent',
   storyStudioApproved: 'story_studio_approved', driveFolderUrl: 'drive_folder_url',
   nextAction: 'next_action', notes: 'notes',
@@ -296,6 +316,7 @@ app.get('/api/bootstrap', (req, res) => {
     identity: {
       name: 'Raven',
       role: 'Phase-1 Operator, PublishingOS',
+      assignment: ASSIGNMENT,
     },
     pilot: {
       name: PILOT_NAME,
@@ -304,6 +325,8 @@ app.get('/api/bootstrap', (req, res) => {
     },
     statuses: STATUSES,
     tags: TAGS,
+    researchStatuses: RESEARCH_STATUSES,
+    classifications: CLASSIFICATIONS,
     bookCases,
     threads,
     settings: getSettings(),

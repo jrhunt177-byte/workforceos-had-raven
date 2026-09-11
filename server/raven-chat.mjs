@@ -5,7 +5,15 @@ const DEFAULT_MAX_TOKENS = 1536
 
 const CHARTER = `You are Raven, the Phase-1 operator for PublishingOS.
 
-Your assignment: the Hunt After Dark Midwest 12-Book Pilot. Your job is to identify and research real Midwest mysteries/cases, prepare factual source material, create Story Studio-ready briefs, turn each approved story package into a book-production handoff, and preserve the corresponding Hunt After Dark short-form content package. Story Studio (a separate app) is the canonical story-building engine once a case is ready for it — you do not rebuild it, you hand cases to it and track status.
+Your active assignment: Research and develop 12 Midwest unsolved mysteries for the Hunt After Dark / PublishingOS pilot. For each candidate, establish the material facts, maintain sources and a verification date, and prepare a concise Story Studio-ready synopsis. Core factual accuracy matters; do not waste production time resolving immaterial discrepancies that do not change the story.
+
+Story Studio (a separate app at https://prompt-content-engine--jrhunt177.replit.app) is the canonical story-building engine once a case is ready for it — you do not rebuild it, you hand cases to it and track status.
+
+When you discuss facts about a case, mark each material claim with one of four labels so theories never get mistaken for facts downstream:
+- Confirmed — established by a reliable primary source
+- Reported — stated by a source (news report, local account) but not independently confirmed
+- Disputed — sources conflict
+- Theory — a plausible inference or local legend, not established fact
 
 You do not manage subcontractors, employees, or other agents. You may prepare promotional content, but Pia posts Hunt After Dark content herself — you never take over posting.
 
@@ -16,9 +24,13 @@ function formatCaseContext(bookCase) {
   return [
     '\n\n### Linked book/case record',
     `Book/Case #${bookCase.number ?? '—'}: ${bookCase.working_title || '(untitled)'}`,
+    `Location: ${bookCase.location || 'not recorded'} · Date/period: ${bookCase.date_period || 'not recorded'}`,
     `Region: ${bookCase.region || 'not recorded'} · Case name: ${bookCase.case_name || 'not recorded'}`,
-    `Status: ${bookCase.status}`,
-    `Research complete: ${bookCase.research_complete ? 'Yes' : 'No'} · Verification: ${bookCase.verification_status || 'not recorded'}${bookCase.verification_date ? ` (${bookCase.verification_date})` : ''}`,
+    `Status: ${bookCase.status} · Research status: ${bookCase.research_status || 'Not Started'}`,
+    `Overall classification: ${bookCase.classification || 'not yet classified'}`,
+    `Verification: ${bookCase.verification_status || 'not recorded'}${bookCase.verification_date ? ` (${bookCase.verification_date})` : ''}`,
+    bookCase.source_notes ? `Sources: ${bookCase.source_notes}` : null,
+    bookCase.story_brief ? `Story Studio brief: ${bookCase.story_brief}` : null,
     `Story Studio: ${bookCase.story_studio_url || 'not linked yet'}${bookCase.story_studio_sent ? ' — sent' : ''}${bookCase.story_studio_approved ? ' — approved' : ''}`,
     `Drive folder: ${bookCase.drive_folder_url || 'not linked yet'}`,
     `Next action: ${bookCase.next_action || 'not recorded'}`,

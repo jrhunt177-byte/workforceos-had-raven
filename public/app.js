@@ -3,6 +3,8 @@ const state = {
   pilot: null,
   statuses: [],
   tags: [],
+  researchStatuses: [],
+  classifications: [],
   bookCases: [],
   threads: [],
   settings: {},
@@ -121,7 +123,7 @@ document.getElementById('newChatBtn').addEventListener('click', async () => {
 
 document.getElementById('newBookBtn').addEventListener('click', async () => {
   const nextNumber = state.bookCases.reduce((max, b) => Math.max(max, b.number || 0), 0) + 1
-  const bookCase = await api_.createBookCase({ number: nextNumber, workingTitle: `Book ${String(nextNumber).padStart(2, '0')}` })
+  const bookCase = await api_.createBookCase({ number: nextNumber })
   state.bookCases.push(bookCase)
   navigate(`/books/${bookCase.id}`)
   closeSidebar()
@@ -154,6 +156,11 @@ function renderHome() {
         <a class="btn" href="${settings.storyStudioUrl ? esc(settings.storyStudioUrl) : '#'}" target="_blank" rel="noopener">Open Story Studio ↗</a>
         <a class="btn" href="${settings.driveWorkspaceUrl ? esc(settings.driveWorkspaceUrl) : '#'}" target="_blank" rel="noopener" ${settings.driveWorkspaceUrl ? '' : 'aria-disabled="true" style="opacity:.5;pointer-events:none;"'}>Open Drive Folder ↗</a>
       </div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">Current Assignment</div>
+      <div>${esc(identity.assignment)}</div>
     </div>
 
     ${!state.chatConfigured ? `
@@ -217,6 +224,12 @@ function renderHome() {
 
 // ---------------- books list view ----------------
 
+function classificationBadgeClass(classification) {
+  if (classification === 'Confirmed') return 'badge'
+  if (classification === 'Theory') return 'badge badge-muted'
+  return 'badge badge-outline'
+}
+
 function renderBooks() {
   const sorted = [...state.bookCases].sort((a, b) => (a.number || 0) - (b.number || 0))
   $main.innerHTML = `
@@ -225,16 +238,22 @@ function renderBooks() {
       <button class="btn btn-gold btn-sm" id="booksNewBtn">+ New Book/Case</button>
     </div>
     <div class="book-list">
-      ${sorted.map((b) => `
-        <div class="book-card" data-book="${b.id}">
+      ${sorted.map((b) => {
+        const isEmpty = !b.workingTitle && !b.caseName
+        return `
+        <div class="book-card ${isEmpty ? 'book-card-empty' : ''}" data-book="${b.id}">
           <div class="spread">
-            <span class="b-title">Book ${b.number ?? '—'} — ${esc(b.workingTitle || '(untitled)')}</span>
+            <span class="b-title">Book ${String(b.number ?? '—').padStart(2, '0')}${isEmpty ? ' — Empty Slot' : ' — ' + esc(b.workingTitle || b.caseName)}</span>
             <span class="badge">${esc(b.status)}</span>
           </div>
-          <div class="b-meta">${esc(b.caseName || 'Case not named yet')}${b.region ? ' · ' + esc(b.region) : ''}</div>
+          ${!isEmpty ? `<div class="b-meta">${esc(b.caseName || 'Case not named yet')}${b.location ? ' · ' + esc(b.location) : (b.region ? ' · ' + esc(b.region) : '')}</div>` : '<div class="b-meta">Not yet researched.</div>'}
+          <div class="row" style="margin-top:6px;gap:6px;">
+            <span class="badge badge-muted">Research: ${esc(b.researchStatus || 'Not Started')}</span>
+            ${b.classification ? `<span class="${classificationBadgeClass(b.classification)}">${esc(b.classification)}</span>` : ''}
+          </div>
           ${b.nextAction ? `<div class="b-meta">Next: ${esc(b.nextAction)}</div>` : ''}
         </div>
-      `).join('') || '<div class="muted">No book/case records yet.</div>'}
+      `}).join('') || '<div class="muted">No book/case records yet.</div>'}
     </div>
   `
   $main.querySelector('#booksNewBtn').addEventListener('click', () => document.getElementById('newBookBtn').click())
@@ -249,13 +268,14 @@ function renderBookDetail(id) {
   const b = bookCaseById(id)
   if (!b) { navigate('/books'); return }
   const linkedThreads = state.threads.filter((t) => t.bookCaseId === b.id)
+  const isPilotSlot = b.number >= 1 && b.number <= 12
 
   $main.innerHTML = `
     <div class="spread" style="margin-bottom:12px;">
-      <div class="section-title" style="margin-bottom:0;">Book ${b.number ?? '—'} — ${esc(b.workingTitle || '(untitled)')}</div>
+      <div class="section-title" style="margin-bottom:0;">Book ${String(b.number ?? '—').padStart(2, '0')} — ${esc(b.workingTitle || b.caseName || '(unresearched)')}</div>
       <div class="row">
         <button class="btn btn-sm" id="bookChatBtn">Start Chat for this Book</button>
-        <button class="btn btn-danger btn-sm" id="bookDeleteBtn">Delete</button>
+        <button class="btn btn-danger btn-sm" id="bookDeleteBtn">${isPilotSlot ? 'Clear Slot' : 'Delete'}</button>
       </div>
     </div>
 
@@ -263,32 +283,47 @@ function renderBookDetail(id) {
       <div class="grid grid-2">
         <div class="field"><label>Working Title</label><input id="f-workingTitle" value="${esc(b.workingTitle)}" /></div>
         <div class="field"><label>Book/Case Number</label><input id="f-number" type="number" value="${b.number ?? ''}" /></div>
-        <div class="field"><label>Region</label><input id="f-region" value="${esc(b.region)}" /></div>
         <div class="field"><label>Case Name</label><input id="f-caseName" value="${esc(b.caseName)}" /></div>
+        <div class="field"><label>Location</label><input id="f-location" value="${esc(b.location)}" placeholder="Town, county, state" /></div>
+        <div class="field"><label>Date / Time Period</label><input id="f-datePeriod" value="${esc(b.datePeriod)}" placeholder="e.g. 1978, or 1920s-1930s" /></div>
+        <div class="field"><label>Region</label><input id="f-region" value="${esc(b.region)}" /></div>
         <div class="field">
-          <label>Status</label>
+          <label>Current Status</label>
           <select id="f-status">${state.statuses.map((s) => `<option value="${esc(s)}" ${s === b.status ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>
+        </div>
+        <div class="field">
+          <label>Research Status</label>
+          <select id="f-researchStatus">${state.researchStatuses.map((s) => `<option value="${esc(s)}" ${s === b.researchStatus ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>
+        </div>
+        <div class="field">
+          <label>Fact Classification</label>
+          <select id="f-classification">
+            <option value="" ${!b.classification ? 'selected' : ''}>Not yet classified</option>
+            ${state.classifications.map((c) => `<option value="${esc(c)}" ${c === b.classification ? 'selected' : ''}>${esc(c)}</option>`).join('')}
+          </select>
         </div>
         <div class="field"><label>Verification Status</label><input id="f-verificationStatus" value="${esc(b.verificationStatus)}" /></div>
         <div class="field"><label>Verification Date</label><input id="f-verificationDate" type="date" value="${esc(b.verificationDate)}" /></div>
       </div>
-      <div class="checkbox-field">
-        <input type="checkbox" id="f-researchComplete" ${b.researchComplete ? 'checked' : ''} />
-        <label for="f-researchComplete">Research Complete</label>
-      </div>
+      <div class="field"><label>Source Links / Notes</label><textarea id="f-sourceNotes" placeholder="News articles, local archives, interviews — tag claims Confirmed/Reported/Disputed/Theory as needed">${esc(b.sourceNotes)}</textarea></div>
       <div class="field"><label>Next Action</label><input id="f-nextAction" value="${esc(b.nextAction)}" /></div>
       <div class="field"><label>Notes</label><textarea id="f-notes">${esc(b.notes)}</textarea></div>
     </div>
 
     <div class="card">
       <div class="section-title">Story Studio</div>
-      <div class="grid grid-2">
+      <div class="field">
+        <label>One-Paragraph Story Studio Brief</label>
+        <textarea id="f-storyBrief" placeholder="Concise synopsis ready to paste into Story Studio">${esc(b.storyBrief)}</textarea>
+      </div>
+      <button class="btn btn-sm" id="copyBriefBtn" type="button">Copy Brief</button>
+      <div class="grid grid-2" style="margin-top:10px;">
         <div class="field"><label>Project URL</label><input id="f-storyStudioUrl" value="${esc(b.storyStudioUrl)}" /></div>
         <div class="field"><label>Project ID</label><input id="f-storyStudioProjectId" value="${esc(b.storyStudioProjectId)}" /></div>
       </div>
       <div class="checkbox-field"><input type="checkbox" id="f-storyStudioSent" ${b.storyStudioSent ? 'checked' : ''} /><label for="f-storyStudioSent">Sent to Story Studio</label></div>
       <div class="checkbox-field"><input type="checkbox" id="f-storyStudioApproved" ${b.storyStudioApproved ? 'checked' : ''} /><label for="f-storyStudioApproved">Story Studio Output Approved</label></div>
-      ${b.storyStudioUrl ? `<a class="btn btn-sm" href="${esc(b.storyStudioUrl)}" target="_blank" rel="noopener">Open Story Studio ↗</a>` : ''}
+      <a class="btn btn-sm" href="${b.storyStudioUrl ? esc(b.storyStudioUrl) : esc(state.settings.storyStudioUrl || '#')}" target="_blank" rel="noopener">Open Story Studio ↗</a>
     </div>
 
     <div class="card">
@@ -309,33 +344,51 @@ function renderBookDetail(id) {
     <button class="btn btn-gold" id="bookSaveBtn">Save Changes</button>
   `
 
-  $main.querySelector('#bookSaveBtn').addEventListener('click', async () => {
-    const data = {
+  function collectFormData() {
+    return {
       workingTitle: $main.querySelector('#f-workingTitle').value,
       number: Number($main.querySelector('#f-number').value) || null,
-      region: $main.querySelector('#f-region').value,
       caseName: $main.querySelector('#f-caseName').value,
+      location: $main.querySelector('#f-location').value,
+      datePeriod: $main.querySelector('#f-datePeriod').value,
+      region: $main.querySelector('#f-region').value,
       status: $main.querySelector('#f-status').value,
+      researchStatus: $main.querySelector('#f-researchStatus').value,
+      classification: $main.querySelector('#f-classification').value,
       verificationStatus: $main.querySelector('#f-verificationStatus').value,
       verificationDate: $main.querySelector('#f-verificationDate').value,
-      researchComplete: $main.querySelector('#f-researchComplete').checked,
+      sourceNotes: $main.querySelector('#f-sourceNotes').value,
       nextAction: $main.querySelector('#f-nextAction').value,
       notes: $main.querySelector('#f-notes').value,
+      storyBrief: $main.querySelector('#f-storyBrief').value,
       storyStudioUrl: $main.querySelector('#f-storyStudioUrl').value,
       storyStudioProjectId: $main.querySelector('#f-storyStudioProjectId').value,
       storyStudioSent: $main.querySelector('#f-storyStudioSent').checked,
       storyStudioApproved: $main.querySelector('#f-storyStudioApproved').checked,
       driveFolderUrl: $main.querySelector('#f-driveFolderUrl').value,
     }
-    const updated = await api_.patchBookCase(b.id, data)
+  }
+
+  $main.querySelector('#bookSaveBtn').addEventListener('click', async () => {
+    const updated = await api_.patchBookCase(b.id, collectFormData())
     const idx = state.bookCases.findIndex((x) => x.id === b.id)
     state.bookCases[idx] = updated
     renderBookDetail(b.id)
   })
 
+  $main.querySelector('#copyBriefBtn').addEventListener('click', () => {
+    const text = $main.querySelector('#f-storyBrief').value.trim()
+    if (!text) return
+    navigator.clipboard.writeText(text).then(() => {
+      const btn = $main.querySelector('#copyBriefBtn')
+      btn.textContent = 'Copied'
+      setTimeout(() => { btn.textContent = 'Copy Brief' }, 1200)
+    })
+  })
+
   $main.querySelector('#bookChatBtn').addEventListener('click', async () => {
     const thread = await api_.createThread({
-      title: `${b.workingTitle || 'Book ' + b.number} chat`,
+      title: `${b.workingTitle || b.caseName || 'Book ' + String(b.number).padStart(2, '0')} chat`,
       tag: 'Book / Case Research',
       bookCaseId: b.id,
     })
@@ -345,6 +398,20 @@ function renderBookDetail(id) {
   })
 
   $main.querySelector('#bookDeleteBtn').addEventListener('click', async () => {
+    if (isPilotSlot) {
+      if (!confirm(`Clear Book ${String(b.number).padStart(2, '0')}? This resets it to an empty, unresearched slot — the slot itself stays part of the 12-book pilot.`)) return
+      const cleared = await api_.patchBookCase(b.id, {
+        workingTitle: '', caseName: '', location: '', datePeriod: '', region: '',
+        status: 'Idea', researchStatus: 'Not Started', classification: '',
+        verificationStatus: '', verificationDate: '', sourceNotes: '', storyBrief: '',
+        storyStudioUrl: '', storyStudioProjectId: '', storyStudioSent: false, storyStudioApproved: false,
+        driveFolderUrl: '', nextAction: '', notes: '',
+      })
+      const idx = state.bookCases.findIndex((x) => x.id === b.id)
+      state.bookCases[idx] = cleared
+      navigate('/books')
+      return
+    }
     if (!confirm(`Delete Book ${b.number ?? ''} — ${b.workingTitle || '(untitled)'}? This cannot be undone.`)) return
     await api_.deleteBookCase(b.id)
     state.bookCases = state.bookCases.filter((x) => x.id !== b.id)
@@ -370,7 +437,7 @@ async function renderChat(id) {
           <select id="chatTagSelect">${state.tags.map((t) => `<option value="${esc(t)}" ${t === thread.tag ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>
           <select id="chatBookSelect">
             <option value="">No linked book/case</option>
-            ${state.bookCases.map((b) => `<option value="${b.id}" ${b.id === thread.bookCaseId ? 'selected' : ''}>Book ${b.number ?? '—'} — ${esc(b.workingTitle || '(untitled)')}</option>`).join('')}
+            ${[...state.bookCases].sort((a, c) => (a.number || 0) - (c.number || 0)).map((b) => `<option value="${b.id}" ${b.id === thread.bookCaseId ? 'selected' : ''}>Book ${String(b.number ?? '—').padStart(2, '0')} — ${esc(b.workingTitle || b.caseName || 'Empty Slot')}</option>`).join('')}
           </select>
           <button class="btn btn-sm" id="chatArchiveBtn">${thread.archived ? 'Unarchive' : 'Archive'}</button>
           <button class="btn btn-danger btn-sm" id="chatDeleteBtn">Delete</button>
