@@ -1,0 +1,29 @@
+{
+  "name": "workforceos-had-raven",
+  "version": "1.0.0",
+  "description": "Dedicated Raven workspace for Hunt After Dark and PublishingOS, supporting persistent multi-thread chat, story research, book production, and the Midwest 12-book pilot.",
+  "type": "module",
+  "main": "server/index.mjs",
+  "scripts": {
+    "start": "node server/index.mjs",
+    "dev": "node server/index.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jrhunt177-byte/workforceos-had-raven.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/jrhunt177-byte/workforceos-had-raven/issues"
+  },
+  "homepage": "https://github.com/jrhunt177-byte/workforceos-had-raven#readme",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "express": "^5.2.1"
+  }
+}

@@ -1,0 +1,11 @@
+modules = ["nodejs-22"]
+
+run = "npm start"
+
+[deployment]
+run = ["npm", "start"]
+deploymentTarget = "autoscale"
+
+[[ports]]
+localPort = 5000
+externalPort = 80
