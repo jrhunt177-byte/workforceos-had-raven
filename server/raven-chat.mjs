@@ -1,11 +1,14 @@
 const ANTHROPIC_MESSAGES_URL = 'https://api.anthropic.com/v1/messages'
 const ANTHROPIC_VERSION = '2023-06-01'
 const DEFAULT_MODEL = 'claude-sonnet-5'
-const DEFAULT_MAX_TOKENS = 1536
+const DEFAULT_MAX_TOKENS = 2048
+const WEB_SEARCH_MAX_USES = 5
 
 const CHARTER = `You are Raven, the Phase-1 operator for PublishingOS.
 
-Your active assignment: Research and develop 12 Midwest unsolved mysteries for the Hunt After Dark / PublishingOS pilot. For each candidate, establish the material facts, maintain sources and a verification date, and prepare a concise Story Studio-ready synopsis. Core factual accuracy matters; do not waste production time resolving immaterial discrepancies that do not change the story.
+Your active assignment: Research and develop 12 Midwest unsolved mysteries for the Hunt After Dark / PublishingOS pilot. For each candidate, establish the material facts, maintain sources and a verification date, and prepare a concise Story Studio-ready synopsis. Core factual accuracy matters; do not waste production time resolving immaterial discrepancies that do not change the story. For historical-era cases, judge the available evidence reasonably for its period rather than nitpicking immaterial discrepancies.
+
+You have live web search. Use it to verify facts, find primary sources (news archives, court/police records, local historical societies), and confirm details rather than relying on recall alone — recall is a starting point, not a source. When you use search results, say what you found and where it came from so it can be recorded as a source.
 
 Story Studio (a separate app at https://prompt-content-engine--jrhunt177.replit.app) is the canonical story-building engine once a case is ready for it — you do not rebuild it, you hand cases to it and track status.
 
@@ -17,7 +20,7 @@ When you discuss facts about a case, mark each material claim with one of four l
 
 You do not manage subcontractors, employees, or other agents. You may prepare promotional content, but Pia posts Hunt After Dark content herself — you never take over posting.
 
-Be concise, direct, and grounded in the case data given below. If something isn't in the data, say it isn't tracked yet rather than guessing.`
+Be concise, direct, and grounded in the case data given below. If something isn't in the data, say it isn't tracked yet rather than guessing — or search for it.`
 
 function formatCaseContext(bookCase) {
   if (!bookCase) return '\n\nThis conversation is not linked to a specific book/case record.'
@@ -33,6 +36,10 @@ function formatCaseContext(bookCase) {
     bookCase.story_brief ? `Story Studio brief: ${bookCase.story_brief}` : null,
     `Story Studio: ${bookCase.story_studio_url || 'not linked yet'}${bookCase.story_studio_sent ? ' — sent' : ''}${bookCase.story_studio_approved ? ' — approved' : ''}`,
     `Drive folder: ${bookCase.drive_folder_url || 'not linked yet'}`,
+    bookCase.chairman_decision ? `Chairman/Chairwoman decision: ${bookCase.chairman_decision}${bookCase.chairman_notes ? ` (${bookCase.chairman_notes})` : ''}` : null,
+    (bookCase.qa_factual_status && bookCase.qa_factual_status !== 'Not Started') ? `Factual QA: ${bookCase.qa_factual_status}${bookCase.qa_factual_notes ? ` (${bookCase.qa_factual_notes})` : ''}` : null,
+    (bookCase.qa_visual_status && bookCase.qa_visual_status !== 'Not Started') ? `Visual/production QA: ${bookCase.qa_visual_status}${bookCase.qa_visual_notes ? ` (${bookCase.qa_visual_notes})` : ''}` : null,
+    bookCase.john_review_decision ? `John's final review: ${bookCase.john_review_decision}${bookCase.john_review_notes ? ` (${bookCase.john_review_notes})` : ''}` : null,
     `Next action: ${bookCase.next_action || 'not recorded'}`,
     bookCase.notes ? `Notes: ${bookCase.notes}` : null,
   ].filter(Boolean).join('\n')
@@ -80,6 +87,9 @@ export async function generateRavenReply({
       max_tokens: maxTokens,
       system,
       messages: toAnthropicMessages(history),
+      tools: [
+        { type: 'web_search_20260209', name: 'web_search', max_uses: WEB_SEARCH_MAX_USES },
+      ],
     }),
   })
   if (!response.ok) {
