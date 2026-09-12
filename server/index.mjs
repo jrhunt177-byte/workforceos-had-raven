@@ -2,7 +2,7 @@ import express from 'express'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import db, { logHandoff, getHandoffLog } from './db.mjs'
+import { get, all, run, logHandoff, getHandoffLog, initDb } from './db.mjs'
 import { generateRavenReply } from './raven-chat.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -33,6 +33,13 @@ app.use(express.json({ limit: '1mb' }))
 
 function now() {
   return new Date().toISOString()
+}
+
+function asyncHandler(fn) {
+  return (req, res) => fn(req, res).catch((err) => {
+    console.error(err)
+    res.status(500).json({ error: 'Internal server error' })
+  })
 }
 
 // ---- book cases ----
@@ -76,19 +83,19 @@ function serializeBookCase(row) {
 }
 
 function getBookCase(id) {
-  return db.prepare('SELECT * FROM book_cases WHERE id = ?').get(id)
+  return get('SELECT * FROM book_cases WHERE id = ?', id)
 }
 
-app.get('/api/book-cases', (req, res) => {
-  const rows = db.prepare('SELECT * FROM book_cases ORDER BY number ASC, created_at ASC').all()
+app.get('/api/book-cases', asyncHandler(async (req, res) => {
+  const rows = await all('SELECT * FROM book_cases ORDER BY number ASC, created_at ASC')
   res.json(rows.map(serializeBookCase))
-})
+}))
 
-app.post('/api/book-cases', (req, res) => {
+app.post('/api/book-cases', asyncHandler(async (req, res) => {
   const b = req.body || {}
   const id = randomUUID()
   const ts = now()
-  db.prepare(`
+  await run(`
     INSERT INTO book_cases (
       id, number, working_title, region, location, date_period, case_name, status,
       research_status, research_complete, classification, verification_status, verification_date,
@@ -100,7 +107,7 @@ app.post('/api/book-cases', (req, res) => {
       @sourceNotes, @storyBrief, @storyStudioUrl, @storyStudioProjectId,
       @storyStudioSent, @storyStudioApproved, @driveFolderUrl, @nextAction, @notes,
       @createdAt, @updatedAt)
-  `).run({
+  `, {
     id,
     number: b.number ?? null,
     workingTitle: b.workingTitle || '',
@@ -110,7 +117,7 @@ app.post('/api/book-cases', (req, res) => {
     caseName: b.caseName || '',
     status: STATUSES.includes(b.status) ? b.status : 'DISCOVERED',
     researchStatus: RESEARCH_STATUSES.includes(b.researchStatus) ? b.researchStatus : 'Not Started',
-    researchComplete: b.researchComplete ? 1 : 0,
+    researchComplete: !!b.researchComplete,
     classification: CLASSIFICATIONS.includes(b.classification) ? b.classification : '',
     verificationStatus: b.verificationStatus || '',
     verificationDate: b.verificationDate || '',
@@ -118,17 +125,17 @@ app.post('/api/book-cases', (req, res) => {
     storyBrief: b.storyBrief || '',
     storyStudioUrl: b.storyStudioUrl || '',
     storyStudioProjectId: b.storyStudioProjectId || '',
-    storyStudioSent: b.storyStudioSent ? 1 : 0,
-    storyStudioApproved: b.storyStudioApproved ? 1 : 0,
+    storyStudioSent: !!b.storyStudioSent,
+    storyStudioApproved: !!b.storyStudioApproved,
     driveFolderUrl: b.driveFolderUrl || '',
     nextAction: b.nextAction || '',
     notes: b.notes || '',
     createdAt: ts,
     updatedAt: ts,
   })
-  logHandoff(id, 'Case created', `Book/case #${b.number ?? '—'} discovered.`)
-  res.status(201).json(serializeBookCase(getBookCase(id)))
-})
+  await logHandoff(id, 'Case created', `Book/case #${b.number ?? '—'} discovered.`)
+  res.status(201).json(serializeBookCase(await getBookCase(id)))
+}))
 
 const BOOK_CASE_FIELD_MAP = {
   number: 'number', workingTitle: 'working_title', region: 'region', location: 'location',
@@ -149,32 +156,32 @@ const BOOLEAN_BOOK_CASE_FIELDS = new Set(['researchComplete', 'storyStudioSent',
 
 // Fields whose change is a real production milestone — logged automatically to the
 // case's durable handoff trail so John never has to relay these by hand (Issue #2).
-function logMilestoneChanges(bookCaseId, existing, b) {
+async function logMilestoneChanges(bookCaseId, existing, b) {
   if ('status' in b && b.status !== existing.status) {
-    logHandoff(bookCaseId, 'Status changed', `${existing.status} → ${b.status}`)
+    await logHandoff(bookCaseId, 'Status changed', `${existing.status} → ${b.status}`)
   }
   if ('chairmanDecision' in b && b.chairmanDecision && b.chairmanDecision !== existing.chairman_decision) {
-    logHandoff(bookCaseId, 'Chairman/Chairwoman decision', b.chairmanDecision + (b.chairmanNotes ? `: ${b.chairmanNotes}` : ''))
+    await logHandoff(bookCaseId, 'Chairman/Chairwoman decision', b.chairmanDecision + (b.chairmanNotes ? `: ${b.chairmanNotes}` : ''))
   }
   if ('storyStudioSent' in b && b.storyStudioSent && !existing.story_studio_sent) {
-    logHandoff(bookCaseId, 'Dispatched to Story Studio', b.storyStudioUrl || existing.story_studio_url || '')
+    await logHandoff(bookCaseId, 'Dispatched to Story Studio', b.storyStudioUrl || existing.story_studio_url || '')
   }
   if ('storyStudioApproved' in b && b.storyStudioApproved && !existing.story_studio_approved) {
-    logHandoff(bookCaseId, 'Story Studio package received', b.storyStudioProjectId || existing.story_studio_project_id || '')
+    await logHandoff(bookCaseId, 'Story Studio package received', b.storyStudioProjectId || existing.story_studio_project_id || '')
   }
   if ('qaFactualStatus' in b && b.qaFactualStatus && b.qaFactualStatus !== existing.qa_factual_status) {
-    logHandoff(bookCaseId, 'Factual QA', b.qaFactualStatus + (b.qaFactualNotes ? `: ${b.qaFactualNotes}` : ''))
+    await logHandoff(bookCaseId, 'Factual QA', b.qaFactualStatus + (b.qaFactualNotes ? `: ${b.qaFactualNotes}` : ''))
   }
   if ('qaVisualStatus' in b && b.qaVisualStatus && b.qaVisualStatus !== existing.qa_visual_status) {
-    logHandoff(bookCaseId, 'Visual/production QA', b.qaVisualStatus + (b.qaVisualNotes ? `: ${b.qaVisualNotes}` : ''))
+    await logHandoff(bookCaseId, 'Visual/production QA', b.qaVisualStatus + (b.qaVisualNotes ? `: ${b.qaVisualNotes}` : ''))
   }
   if ('johnReviewDecision' in b && b.johnReviewDecision && b.johnReviewDecision !== existing.john_review_decision) {
-    logHandoff(bookCaseId, "John's final review", b.johnReviewDecision + (b.johnReviewNotes ? `: ${b.johnReviewNotes}` : ''))
+    await logHandoff(bookCaseId, "John's final review", b.johnReviewDecision + (b.johnReviewNotes ? `: ${b.johnReviewNotes}` : ''))
   }
 }
 
-app.patch('/api/book-cases/:id', (req, res) => {
-  const existing = getBookCase(req.params.id)
+app.patch('/api/book-cases/:id', asyncHandler(async (req, res) => {
+  const existing = await getBookCase(req.params.id)
   if (!existing) return res.status(404).json({ error: 'Book/case not found' })
   const b = req.body || {}
   const sets = []
@@ -182,20 +189,20 @@ app.patch('/api/book-cases/:id', (req, res) => {
   for (const [key, column] of Object.entries(BOOK_CASE_FIELD_MAP)) {
     if (key in b) {
       sets.push(`${column} = @${key}`)
-      params[key] = BOOLEAN_BOOK_CASE_FIELDS.has(key) ? (b[key] ? 1 : 0) : b[key]
+      params[key] = BOOLEAN_BOOK_CASE_FIELDS.has(key) ? !!b[key] : b[key]
     }
   }
   if (sets.length) {
-    db.prepare(`UPDATE book_cases SET ${sets.join(', ')}, updated_at = @updatedAt WHERE id = @id`).run(params)
+    await run(`UPDATE book_cases SET ${sets.join(', ')}, updated_at = @updatedAt WHERE id = @id`, params)
   }
-  logMilestoneChanges(req.params.id, existing, b)
-  res.json(serializeBookCase(getBookCase(req.params.id)))
-})
+  await logMilestoneChanges(req.params.id, existing, b)
+  res.json(serializeBookCase(await getBookCase(req.params.id)))
+}))
 
-app.get('/api/book-cases/:id/handoff-log', (req, res) => {
-  const existing = getBookCase(req.params.id)
+app.get('/api/book-cases/:id/handoff-log', asyncHandler(async (req, res) => {
+  const existing = await getBookCase(req.params.id)
   if (!existing) return res.status(404).json({ error: 'Book/case not found' })
-  const rows = getHandoffLog(req.params.id)
+  const rows = await getHandoffLog(req.params.id)
   res.json(rows.map((r) => ({
     id: r.id,
     milestone: r.milestone,
@@ -203,15 +210,15 @@ app.get('/api/book-cases/:id/handoff-log', (req, res) => {
     driveSynced: !!r.drive_synced,
     createdAt: r.created_at,
   })))
-})
+}))
 
-app.delete('/api/book-cases/:id', (req, res) => {
-  const existing = getBookCase(req.params.id)
+app.delete('/api/book-cases/:id', asyncHandler(async (req, res) => {
+  const existing = await getBookCase(req.params.id)
   if (!existing) return res.status(404).json({ error: 'Book/case not found' })
-  db.prepare('UPDATE threads SET book_case_id = NULL WHERE book_case_id = ?').run(req.params.id)
-  db.prepare('DELETE FROM book_cases WHERE id = ?').run(req.params.id)
+  await run('UPDATE threads SET book_case_id = NULL WHERE book_case_id = ?', req.params.id)
+  await run('DELETE FROM book_cases WHERE id = ?', req.params.id)
   res.status(204).end()
-})
+}))
 
 // ---- threads ----
 
@@ -229,22 +236,22 @@ function serializeThread(row) {
 }
 
 function getThread(id) {
-  return db.prepare('SELECT * FROM threads WHERE id = ?').get(id)
+  return get('SELECT * FROM threads WHERE id = ?', id)
 }
 
-app.get('/api/threads', (req, res) => {
-  const rows = db.prepare('SELECT * FROM threads ORDER BY archived_at IS NOT NULL ASC, updated_at DESC').all()
+app.get('/api/threads', asyncHandler(async (req, res) => {
+  const rows = await all('SELECT * FROM threads ORDER BY archived_at IS NOT NULL ASC, updated_at DESC')
   res.json(rows.map(serializeThread))
-})
+}))
 
-app.post('/api/threads', (req, res) => {
+app.post('/api/threads', asyncHandler(async (req, res) => {
   const b = req.body || {}
   const id = randomUUID()
   const ts = now()
-  db.prepare(`
+  await run(`
     INSERT INTO threads (id, title, tag, book_case_id, created_at, updated_at)
     VALUES (@id, @title, @tag, @bookCaseId, @createdAt, @updatedAt)
-  `).run({
+  `, {
     id,
     title: b.title || 'New Chat',
     tag: TAGS.includes(b.tag) ? b.tag : 'General Raven Ops',
@@ -252,11 +259,11 @@ app.post('/api/threads', (req, res) => {
     createdAt: ts,
     updatedAt: ts,
   })
-  res.status(201).json(serializeThread(getThread(id)))
-})
+  res.status(201).json(serializeThread(await getThread(id)))
+}))
 
-app.patch('/api/threads/:id', (req, res) => {
-  const existing = getThread(req.params.id)
+app.patch('/api/threads/:id', asyncHandler(async (req, res) => {
+  const existing = await getThread(req.params.id)
   if (!existing) return res.status(404).json({ error: 'Chat not found' })
   const b = req.body || {}
   const sets = []
@@ -266,17 +273,17 @@ app.patch('/api/threads/:id', (req, res) => {
   if ('bookCaseId' in b) { sets.push('book_case_id = @bookCaseId'); params.bookCaseId = b.bookCaseId || null }
   if ('archived' in b) { sets.push('archived_at = @archivedAt'); params.archivedAt = b.archived ? now() : null }
   if (sets.length) {
-    db.prepare(`UPDATE threads SET ${sets.join(', ')}, updated_at = @updatedAt WHERE id = @id`).run(params)
+    await run(`UPDATE threads SET ${sets.join(', ')}, updated_at = @updatedAt WHERE id = @id`, params)
   }
-  res.json(serializeThread(getThread(req.params.id)))
-})
+  res.json(serializeThread(await getThread(req.params.id)))
+}))
 
-app.delete('/api/threads/:id', (req, res) => {
-  const existing = getThread(req.params.id)
+app.delete('/api/threads/:id', asyncHandler(async (req, res) => {
+  const existing = await getThread(req.params.id)
   if (!existing) return res.status(404).json({ error: 'Chat not found' })
-  db.prepare('DELETE FROM threads WHERE id = ?').run(req.params.id)
+  await run('DELETE FROM threads WHERE id = ?', req.params.id)
   res.status(204).end()
-})
+}))
 
 // ---- messages ----
 
@@ -290,15 +297,15 @@ function serializeMessage(row) {
   }
 }
 
-app.get('/api/threads/:id/messages', (req, res) => {
-  const thread = getThread(req.params.id)
+app.get('/api/threads/:id/messages', asyncHandler(async (req, res) => {
+  const thread = await getThread(req.params.id)
   if (!thread) return res.status(404).json({ error: 'Chat not found' })
-  const rows = db.prepare('SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at ASC').all(req.params.id)
+  const rows = await all('SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at ASC', req.params.id)
   res.json(rows.map(serializeMessage))
-})
+}))
 
-app.post('/api/threads/:id/messages', async (req, res) => {
-  const thread = getThread(req.params.id)
+app.post('/api/threads/:id/messages', asyncHandler(async (req, res) => {
+  const thread = await getThread(req.params.id)
   if (!thread) return res.status(404).json({ error: 'Chat not found' })
   const content = (req.body || {}).content
   if (!content || !content.trim()) return res.status(400).json({ error: 'Message content is required' })
@@ -310,10 +317,10 @@ app.post('/api/threads/:id/messages', async (req, res) => {
     content: content.trim(),
     created_at: now(),
   }
-  db.prepare('INSERT INTO messages (id, thread_id, role, content, created_at) VALUES (@id, @thread_id, @role, @content, @created_at)').run(userMessage)
+  await run('INSERT INTO messages (id, thread_id, role, content, created_at) VALUES (@id, @thread_id, @role, @content, @created_at)', userMessage)
 
-  const history = db.prepare('SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at ASC').all(thread.id)
-  const bookCase = thread.book_case_id ? getBookCase(thread.book_case_id) : null
+  const history = await all('SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at ASC', thread.id)
+  const bookCase = thread.book_case_id ? await getBookCase(thread.book_case_id) : null
 
   try {
     const replyText = await generateRavenReply({
@@ -328,48 +335,54 @@ app.post('/api/threads/:id/messages', async (req, res) => {
       content: replyText,
       created_at: now(),
     }
-    db.prepare('INSERT INTO messages (id, thread_id, role, content, created_at) VALUES (@id, @thread_id, @role, @content, @created_at)').run(ravenMessage)
-    db.prepare('UPDATE threads SET updated_at = @updatedAt WHERE id = @id').run({ id: thread.id, updatedAt: now() })
+    await run('INSERT INTO messages (id, thread_id, role, content, created_at) VALUES (@id, @thread_id, @role, @content, @created_at)', ravenMessage)
+    await run('UPDATE threads SET updated_at = @updatedAt WHERE id = @id', { id: thread.id, updatedAt: now() })
     res.status(201).json({
       userMessage: serializeMessage(userMessage),
       ravenMessage: serializeMessage(ravenMessage),
     })
   } catch (err) {
-    db.prepare('UPDATE threads SET updated_at = @updatedAt WHERE id = @id').run({ id: thread.id, updatedAt: now() })
+    await run('UPDATE threads SET updated_at = @updatedAt WHERE id = @id', { id: thread.id, updatedAt: now() })
     res.status(err.statusCode || 502).json({
       userMessage: serializeMessage(userMessage),
       error: err.message,
     })
   }
-})
+}))
 
 // ---- settings ----
 
-function getSettings() {
-  const rows = db.prepare('SELECT key, value FROM settings').all()
+async function getSettings() {
+  const rows = await all('SELECT key, value FROM settings')
   const out = {}
   for (const r of rows) out[r.key] = r.value
   return out
 }
 
-app.get('/api/settings', (req, res) => {
-  res.json(getSettings())
-})
+app.get('/api/settings', asyncHandler(async (req, res) => {
+  res.json(await getSettings())
+}))
 
-app.patch('/api/settings', (req, res) => {
+app.patch('/api/settings', asyncHandler(async (req, res) => {
   const b = req.body || {}
-  const upsert = db.prepare('INSERT INTO settings (key, value) VALUES (@key, @value) ON CONFLICT(key) DO UPDATE SET value = @value')
   for (const key of ['storyStudioUrl', 'driveWorkspaceUrl']) {
-    if (key in b) upsert.run({ key, value: b[key] || '' })
+    if (key in b) {
+      await run(
+        'INSERT INTO settings (key, value) VALUES (@key, @value) ON CONFLICT(key) DO UPDATE SET value = @value',
+        { key, value: b[key] || '' }
+      )
+    }
   }
-  res.json(getSettings())
-})
+  res.json(await getSettings())
+}))
 
 // ---- bootstrap / dashboard ----
 
-app.get('/api/bootstrap', (req, res) => {
-  const bookCases = db.prepare('SELECT * FROM book_cases ORDER BY number ASC, created_at ASC').all().map(serializeBookCase)
-  const threads = db.prepare('SELECT * FROM threads ORDER BY archived_at IS NOT NULL ASC, updated_at DESC').all().map(serializeThread)
+app.get('/api/bootstrap', asyncHandler(async (req, res) => {
+  const bookCaseRows = await all('SELECT * FROM book_cases ORDER BY number ASC, created_at ASC')
+  const bookCases = bookCaseRows.map(serializeBookCase)
+  const threadRows = await all('SELECT * FROM threads ORDER BY archived_at IS NOT NULL ASC, updated_at DESC')
+  const threads = threadRows.map(serializeThread)
   const completed = bookCases.filter((c) => c.status === 'PUBLISHED').length
   res.json({
     identity: {
@@ -391,19 +404,27 @@ app.get('/api/bootstrap', (req, res) => {
     johnReviewDecisions: JOHN_REVIEW_DECISIONS,
     bookCases,
     threads,
-    settings: getSettings(),
+    settings: await getSettings(),
     chatConfigured: !!process.env.ANTHROPIC_API_KEY,
   })
-})
+}))
 
 app.use(express.static(path.join(__dirname, '..', 'public')))
 app.get('/{*splat}', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'))
 })
 
-app.listen(PORT, () => {
-  console.log(`Raven workspace listening on port ${PORT}`)
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.warn('ANTHROPIC_API_KEY is not set — chat replies will fail until it is configured.')
-  }
+async function main() {
+  await initDb()
+  app.listen(PORT, () => {
+    console.log(`Raven workspace listening on port ${PORT}`)
+    if (!process.env.ANTHROPIC_API_KEY) {
+      console.warn('ANTHROPIC_API_KEY is not set — chat replies will fail until it is configured.')
+    }
+  })
+}
+
+main().catch((err) => {
+  console.error('Failed to start Raven workspace:', err)
+  process.exit(1)
 })
