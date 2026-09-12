@@ -2,7 +2,7 @@ import express from 'express'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import db from './db.mjs'
+import db, { logHandoff, getHandoffLog } from './db.mjs'
 import { generateRavenReply } from './raven-chat.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -10,9 +10,12 @@ const PORT = process.env.PORT || 5000
 const PILOT_NAME = 'Midwest 12-Book Pilot'
 const PILOT_TOTAL = 12
 
+// Production pipeline (Architect ↔ Builder bridge, Issue #2) — supersedes the earlier
+// simpler status list. One case/job record moves through these in order.
 const STATUSES = [
-  'Idea', 'Researching', 'Verified', 'Story Studio', 'Story Approved',
-  'Artwork', 'Layout', 'QA', 'KDP Ready', 'Published',
+  'DISCOVERED', 'AWAITING APPROVAL', 'APPROVED', 'RESEARCH', 'FACT VERIFIED',
+  'STORY STUDIO', 'STORY COMPLETE', 'BOOK PRODUCTION', 'QA', 'JOHN REVIEW',
+  'APPROVED TO PUBLISH', 'PUBLISHED',
 ]
 const TAGS = [
   'Book / Case Research', 'Story Studio Prep', 'Publishing Package',
@@ -20,6 +23,9 @@ const TAGS = [
 ]
 const RESEARCH_STATUSES = ['Not Started', 'Researching', 'Complete']
 const CLASSIFICATIONS = ['Confirmed', 'Reported', 'Disputed', 'Theory']
+const CHAIRMAN_DECISIONS = ['Approved', 'Rejected', 'Revise']
+const QA_STATUSES = ['Not Started', 'Pass', 'Fail']
+const JOHN_REVIEW_DECISIONS = ['Approved for Publication', 'Return with Note', 'Rejected']
 const ASSIGNMENT = 'Research and develop 12 Midwest unsolved mysteries for the Hunt After Dark / PublishingOS pilot. For each candidate, establish the material facts, maintain sources and a verification date, and prepare a concise Story Studio-ready synopsis. Core factual accuracy matters; do not waste production time resolving immaterial discrepancies that do not change the story.'
 
 const app = express()
@@ -54,6 +60,14 @@ function serializeBookCase(row) {
     storyStudioSent: !!row.story_studio_sent,
     storyStudioApproved: !!row.story_studio_approved,
     driveFolderUrl: row.drive_folder_url,
+    chairmanDecision: row.chairman_decision,
+    chairmanNotes: row.chairman_notes,
+    qaFactualStatus: row.qa_factual_status,
+    qaFactualNotes: row.qa_factual_notes,
+    qaVisualStatus: row.qa_visual_status,
+    qaVisualNotes: row.qa_visual_notes,
+    johnReviewDecision: row.john_review_decision,
+    johnReviewNotes: row.john_review_notes,
     nextAction: row.next_action,
     notes: row.notes,
     createdAt: row.created_at,
@@ -94,7 +108,7 @@ app.post('/api/book-cases', (req, res) => {
     location: b.location || '',
     datePeriod: b.datePeriod || '',
     caseName: b.caseName || '',
-    status: STATUSES.includes(b.status) ? b.status : 'Idea',
+    status: STATUSES.includes(b.status) ? b.status : 'DISCOVERED',
     researchStatus: RESEARCH_STATUSES.includes(b.researchStatus) ? b.researchStatus : 'Not Started',
     researchComplete: b.researchComplete ? 1 : 0,
     classification: CLASSIFICATIONS.includes(b.classification) ? b.classification : '',
@@ -112,6 +126,7 @@ app.post('/api/book-cases', (req, res) => {
     createdAt: ts,
     updatedAt: ts,
   })
+  logHandoff(id, 'Case created', `Book/case #${b.number ?? '—'} discovered.`)
   res.status(201).json(serializeBookCase(getBookCase(id)))
 })
 
@@ -124,9 +139,39 @@ const BOOK_CASE_FIELD_MAP = {
   storyStudioUrl: 'story_studio_url',
   storyStudioProjectId: 'story_studio_project_id', storyStudioSent: 'story_studio_sent',
   storyStudioApproved: 'story_studio_approved', driveFolderUrl: 'drive_folder_url',
+  chairmanDecision: 'chairman_decision', chairmanNotes: 'chairman_notes',
+  qaFactualStatus: 'qa_factual_status', qaFactualNotes: 'qa_factual_notes',
+  qaVisualStatus: 'qa_visual_status', qaVisualNotes: 'qa_visual_notes',
+  johnReviewDecision: 'john_review_decision', johnReviewNotes: 'john_review_notes',
   nextAction: 'next_action', notes: 'notes',
 }
 const BOOLEAN_BOOK_CASE_FIELDS = new Set(['researchComplete', 'storyStudioSent', 'storyStudioApproved'])
+
+// Fields whose change is a real production milestone — logged automatically to the
+// case's durable handoff trail so John never has to relay these by hand (Issue #2).
+function logMilestoneChanges(bookCaseId, existing, b) {
+  if ('status' in b && b.status !== existing.status) {
+    logHandoff(bookCaseId, 'Status changed', `${existing.status} → ${b.status}`)
+  }
+  if ('chairmanDecision' in b && b.chairmanDecision && b.chairmanDecision !== existing.chairman_decision) {
+    logHandoff(bookCaseId, 'Chairman/Chairwoman decision', b.chairmanDecision + (b.chairmanNotes ? `: ${b.chairmanNotes}` : ''))
+  }
+  if ('storyStudioSent' in b && b.storyStudioSent && !existing.story_studio_sent) {
+    logHandoff(bookCaseId, 'Dispatched to Story Studio', b.storyStudioUrl || existing.story_studio_url || '')
+  }
+  if ('storyStudioApproved' in b && b.storyStudioApproved && !existing.story_studio_approved) {
+    logHandoff(bookCaseId, 'Story Studio package received', b.storyStudioProjectId || existing.story_studio_project_id || '')
+  }
+  if ('qaFactualStatus' in b && b.qaFactualStatus && b.qaFactualStatus !== existing.qa_factual_status) {
+    logHandoff(bookCaseId, 'Factual QA', b.qaFactualStatus + (b.qaFactualNotes ? `: ${b.qaFactualNotes}` : ''))
+  }
+  if ('qaVisualStatus' in b && b.qaVisualStatus && b.qaVisualStatus !== existing.qa_visual_status) {
+    logHandoff(bookCaseId, 'Visual/production QA', b.qaVisualStatus + (b.qaVisualNotes ? `: ${b.qaVisualNotes}` : ''))
+  }
+  if ('johnReviewDecision' in b && b.johnReviewDecision && b.johnReviewDecision !== existing.john_review_decision) {
+    logHandoff(bookCaseId, "John's final review", b.johnReviewDecision + (b.johnReviewNotes ? `: ${b.johnReviewNotes}` : ''))
+  }
+}
 
 app.patch('/api/book-cases/:id', (req, res) => {
   const existing = getBookCase(req.params.id)
@@ -143,7 +188,21 @@ app.patch('/api/book-cases/:id', (req, res) => {
   if (sets.length) {
     db.prepare(`UPDATE book_cases SET ${sets.join(', ')}, updated_at = @updatedAt WHERE id = @id`).run(params)
   }
+  logMilestoneChanges(req.params.id, existing, b)
   res.json(serializeBookCase(getBookCase(req.params.id)))
+})
+
+app.get('/api/book-cases/:id/handoff-log', (req, res) => {
+  const existing = getBookCase(req.params.id)
+  if (!existing) return res.status(404).json({ error: 'Book/case not found' })
+  const rows = getHandoffLog(req.params.id)
+  res.json(rows.map((r) => ({
+    id: r.id,
+    milestone: r.milestone,
+    detail: r.detail,
+    driveSynced: !!r.drive_synced,
+    createdAt: r.created_at,
+  })))
 })
 
 app.delete('/api/book-cases/:id', (req, res) => {
@@ -311,7 +370,7 @@ app.patch('/api/settings', (req, res) => {
 app.get('/api/bootstrap', (req, res) => {
   const bookCases = db.prepare('SELECT * FROM book_cases ORDER BY number ASC, created_at ASC').all().map(serializeBookCase)
   const threads = db.prepare('SELECT * FROM threads ORDER BY archived_at IS NOT NULL ASC, updated_at DESC').all().map(serializeThread)
-  const completed = bookCases.filter((c) => c.status === 'Published').length
+  const completed = bookCases.filter((c) => c.status === 'PUBLISHED').length
   res.json({
     identity: {
       name: 'Raven',
@@ -327,6 +386,9 @@ app.get('/api/bootstrap', (req, res) => {
     tags: TAGS,
     researchStatuses: RESEARCH_STATUSES,
     classifications: CLASSIFICATIONS,
+    chairmanDecisions: CHAIRMAN_DECISIONS,
+    qaStatuses: QA_STATUSES,
+    johnReviewDecisions: JOHN_REVIEW_DECISIONS,
     bookCases,
     threads,
     settings: getSettings(),

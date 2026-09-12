@@ -5,6 +5,9 @@ const state = {
   tags: [],
   researchStatuses: [],
   classifications: [],
+  chairmanDecisions: [],
+  qaStatuses: [],
+  johnReviewDecisions: [],
   bookCases: [],
   threads: [],
   settings: {},
@@ -44,6 +47,7 @@ const api_ = {
   createBookCase: (data) => api('/api/book-cases', { method: 'POST', body: JSON.stringify(data) }),
   patchBookCase: (id, data) => api(`/api/book-cases/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteBookCase: (id) => api(`/api/book-cases/${id}`, { method: 'DELETE' }),
+  handoffLog: (id) => api(`/api/book-cases/${id}/handoff-log`),
   patchSettings: (data) => api('/api/settings', { method: 'PATCH', body: JSON.stringify(data) }),
 }
 
@@ -136,7 +140,7 @@ function renderHome() {
   const pct = pilot.total ? Math.round((pilot.completed / pilot.total) * 100) : 0
   const activeThreads = state.threads.filter((t) => !t.archived).slice(0, 6)
   const nextActions = bookCases
-    .filter((b) => b.status !== 'Published' && b.nextAction)
+    .filter((b) => b.status !== 'PUBLISHED' && b.nextAction)
     .slice(0, 6)
 
   $main.innerHTML = `
@@ -264,11 +268,12 @@ function renderBooks() {
 
 // ---------------- book detail view ----------------
 
-function renderBookDetail(id) {
+async function renderBookDetail(id) {
   const b = bookCaseById(id)
   if (!b) { navigate('/books'); return }
   const linkedThreads = state.threads.filter((t) => t.bookCaseId === b.id)
   const isPilotSlot = b.number >= 1 && b.number <= 12
+  const handoffLog = await api_.handoffLog(id)
 
   $main.innerHTML = `
     <div class="spread" style="margin-bottom:12px;">
@@ -333,6 +338,49 @@ function renderBookDetail(id) {
     </div>
 
     <div class="card">
+      <div class="section-title">Production Pipeline Gates</div>
+      <div class="field">
+        <label>Chairman/Chairwoman Decision</label>
+        <select id="f-chairmanDecision">
+          <option value="" ${!b.chairmanDecision ? 'selected' : ''}>Awaiting decision</option>
+          ${state.chairmanDecisions.map((d) => `<option value="${esc(d)}" ${d === b.chairmanDecision ? 'selected' : ''}>${esc(d)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Chairman/Chairwoman Notes</label><textarea id="f-chairmanNotes">${esc(b.chairmanNotes)}</textarea></div>
+      <div class="grid grid-2">
+        <div class="field">
+          <label>Factual QA</label>
+          <select id="f-qaFactualStatus">${state.qaStatuses.map((s) => `<option value="${esc(s)}" ${s === b.qaFactualStatus ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>
+        </div>
+        <div class="field">
+          <label>Visual/Production QA</label>
+          <select id="f-qaVisualStatus">${state.qaStatuses.map((s) => `<option value="${esc(s)}" ${s === b.qaVisualStatus ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>
+        </div>
+      </div>
+      <div class="field"><label>Factual QA Notes</label><textarea id="f-qaFactualNotes" placeholder="Errors, contradictions...">${esc(b.qaFactualNotes)}</textarea></div>
+      <div class="field"><label>Visual/Production QA Notes</label><textarea id="f-qaVisualNotes" placeholder="Bad AI images, layout/pagination/bleed issues...">${esc(b.qaVisualNotes)}</textarea></div>
+      <div class="field">
+        <label>John's Final Review</label>
+        <select id="f-johnReviewDecision">
+          <option value="" ${!b.johnReviewDecision ? 'selected' : ''}>Awaiting review</option>
+          ${state.johnReviewDecisions.map((d) => `<option value="${esc(d)}" ${d === b.johnReviewDecision ? 'selected' : ''}>${esc(d)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>John's Review Notes</label><textarea id="f-johnReviewNotes">${esc(b.johnReviewNotes)}</textarea></div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">Handoff Log</div>
+      <div class="muted" style="margin-bottom:8px;font-size:0.8rem;">Automatic milestone trail — no manual copying required.</div>
+      ${handoffLog.length ? handoffLog.slice().reverse().map((h) => `
+        <div style="padding:6px 0;border-bottom:1px solid var(--border);">
+          <div class="spread"><strong>${esc(h.milestone)}</strong><span class="muted" style="font-size:0.75rem;">${esc(new Date(h.createdAt).toLocaleString())}</span></div>
+          ${h.detail ? `<div class="muted" style="font-size:0.85rem;">${esc(h.detail)}</div>` : ''}
+        </div>
+      `).join('') : '<div class="muted">No milestones logged yet.</div>'}
+    </div>
+
+    <div class="card">
       <div class="section-title">Linked Chats</div>
       ${linkedThreads.length ? linkedThreads.map((t) => `
         <div class="spread" style="padding:6px 0;border-bottom:1px solid var(--border);cursor:pointer;" data-open-thread="${t.id}">
@@ -366,6 +414,14 @@ function renderBookDetail(id) {
       storyStudioSent: $main.querySelector('#f-storyStudioSent').checked,
       storyStudioApproved: $main.querySelector('#f-storyStudioApproved').checked,
       driveFolderUrl: $main.querySelector('#f-driveFolderUrl').value,
+      chairmanDecision: $main.querySelector('#f-chairmanDecision').value,
+      chairmanNotes: $main.querySelector('#f-chairmanNotes').value,
+      qaFactualStatus: $main.querySelector('#f-qaFactualStatus').value,
+      qaFactualNotes: $main.querySelector('#f-qaFactualNotes').value,
+      qaVisualStatus: $main.querySelector('#f-qaVisualStatus').value,
+      qaVisualNotes: $main.querySelector('#f-qaVisualNotes').value,
+      johnReviewDecision: $main.querySelector('#f-johnReviewDecision').value,
+      johnReviewNotes: $main.querySelector('#f-johnReviewNotes').value,
     }
   }
 
@@ -402,10 +458,12 @@ function renderBookDetail(id) {
       if (!confirm(`Clear Book ${String(b.number).padStart(2, '0')}? This resets it to an empty, unresearched slot — the slot itself stays part of the 12-book pilot.`)) return
       const cleared = await api_.patchBookCase(b.id, {
         workingTitle: '', caseName: '', location: '', datePeriod: '', region: '',
-        status: 'Idea', researchStatus: 'Not Started', classification: '',
+        status: 'DISCOVERED', researchStatus: 'Not Started', classification: '',
         verificationStatus: '', verificationDate: '', sourceNotes: '', storyBrief: '',
         storyStudioUrl: '', storyStudioProjectId: '', storyStudioSent: false, storyStudioApproved: false,
-        driveFolderUrl: '', nextAction: '', notes: '',
+        driveFolderUrl: '', chairmanDecision: '', chairmanNotes: '',
+        qaFactualStatus: 'Not Started', qaFactualNotes: '', qaVisualStatus: 'Not Started', qaVisualNotes: '',
+        johnReviewDecision: '', johnReviewNotes: '', nextAction: '', notes: '',
       })
       const idx = state.bookCases.findIndex((x) => x.id === b.id)
       state.bookCases[idx] = cleared
