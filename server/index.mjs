@@ -3,7 +3,7 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { get, all, run, logHandoff, getHandoffLog, initDb } from './db.mjs'
-import { generateRavenReply } from './raven-chat.mjs'
+import { generateRavenReply, extractCaseFields } from './raven-chat.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PORT = process.env.PORT || 5000
@@ -69,6 +69,8 @@ function serializeBookCase(row) {
     driveFolderUrl: row.drive_folder_url,
     chairmanDecision: row.chairman_decision,
     chairmanNotes: row.chairman_notes,
+    chairmanLockedAt: row.chairman_locked_at || '',
+    chairmanApprovedBy: row.chairman_approved_by || '',
     qaFactualStatus: row.qa_factual_status,
     qaFactualNotes: row.qa_factual_notes,
     qaVisualStatus: row.qa_visual_status,
@@ -198,6 +200,92 @@ app.patch('/api/book-cases/:id', asyncHandler(async (req, res) => {
   await logMilestoneChanges(req.params.id, existing, b)
   res.json(serializeBookCase(await getBookCase(req.params.id)))
 }))
+
+// Chairman/Chairwoman approval is intentionally a separate, explicit action from the
+// draft dropdown on the regular PATCH route — chairman_locked_at/chairman_approved_by
+// are excluded from BOOK_CASE_FIELD_MAP so a lock can only happen here, never as a side
+// effect of an ordinary form save. Locking APPROVED is what triggers the downstream
+// automation the Architect specified (Issue #2): auto-populate blank fields from the
+// case's linked research chat, and advance status into the pipeline.
+app.post('/api/book-cases/:id/lock-approval', asyncHandler(async (req, res) => {
+  const existing = await getBookCase(req.params.id)
+  if (!existing) return res.status(404).json({ error: 'Book/case not found' })
+  const b = req.body || {}
+  const decision = b.decision
+  const approverName = (b.approverName || '').trim()
+  if (!CHAIRMAN_DECISIONS.includes(decision)) {
+    return res.status(400).json({ error: `decision must be one of: ${CHAIRMAN_DECISIONS.join(', ')}` })
+  }
+  if (!approverName) {
+    return res.status(400).json({ error: 'approverName is required to lock a decision' })
+  }
+
+  const lockedAt = now()
+  await run(
+    'UPDATE book_cases SET chairman_decision = @decision, chairman_notes = @notes, chairman_locked_at = @lockedAt, chairman_approved_by = @approverName, updated_at = @lockedAt WHERE id = @id',
+    { id: req.params.id, decision, notes: b.notes ?? existing.chairman_notes, lockedAt, approverName }
+  )
+  await logHandoff(req.params.id, 'Chairman/Chairwoman decision LOCKED', `${decision} by ${approverName}${b.notes ? `: ${b.notes}` : ''}`)
+
+  if (decision === 'Approved') {
+    const currentIdx = STATUSES.indexOf(existing.status)
+    const approvedIdx = STATUSES.indexOf('APPROVED')
+    if (currentIdx < approvedIdx) {
+      await run('UPDATE book_cases SET status = @status, updated_at = @updatedAt WHERE id = @id', { id: req.params.id, status: 'APPROVED', updatedAt: now() })
+      await logHandoff(req.params.id, 'Status changed', `${existing.status} → APPROVED (auto-advanced on locked approval)`)
+    }
+    await autoPopulateFromResearch(req.params.id)
+  }
+
+  res.json(serializeBookCase(await getBookCase(req.params.id)))
+}))
+
+// Best-effort: fills only fields still blank, from whatever's been discussed in threads
+// already linked to this case. Never overwrites data John or Raven already entered, and
+// never invents facts — extractCaseFields leaves anything not clearly established blank.
+async function autoPopulateFromResearch(bookCaseId) {
+  const bookCase = await getBookCase(bookCaseId)
+  const threads = await all('SELECT id FROM threads WHERE book_case_id = ? ORDER BY updated_at ASC', bookCaseId)
+  if (!threads.length) {
+    await logHandoff(bookCaseId, 'Auto-populate skipped', 'no chat thread is linked to this case yet')
+    return
+  }
+  const messages = []
+  for (const t of threads) {
+    const rows = await all('SELECT role, content, created_at FROM messages WHERE thread_id = ? ORDER BY created_at ASC', t.id)
+    messages.push(...rows)
+  }
+  messages.sort((a, c) => new Date(a.created_at) - new Date(c.created_at))
+
+  const { fields, skipped } = await extractCaseFields({
+    apiKey: process.env.ANTHROPIC_API_KEY,
+    messages: messages.map((m) => ({ role: m.role, content: m.content })),
+  })
+  if (skipped) {
+    await logHandoff(bookCaseId, 'Auto-populate skipped', skipped)
+    return
+  }
+
+  const sets = []
+  const params = { id: bookCaseId, updatedAt: now() }
+  const filled = []
+  for (const [key, column] of Object.entries(BOOK_CASE_FIELD_MAP)) {
+    if (!(key in fields)) continue
+    const currentValue = bookCase[column]
+    if (currentValue && String(currentValue).trim()) continue // never overwrite existing data
+    sets.push(`${column} = @${key}`)
+    params[key] = fields[key]
+    filled.push(key)
+  }
+  if (sets.length) {
+    await run(`UPDATE book_cases SET ${sets.join(', ')}, updated_at = @updatedAt WHERE id = @id`, params)
+  }
+  await logHandoff(
+    bookCaseId,
+    'Auto-populated from research chat',
+    filled.length ? `Filled: ${filled.join(', ')}` : 'Nothing new to fill — existing fields already populated'
+  )
+}
 
 app.get('/api/book-cases/:id/handoff-log', asyncHandler(async (req, res) => {
   const existing = await getBookCase(req.params.id)
