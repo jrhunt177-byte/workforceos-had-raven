@@ -50,21 +50,46 @@ See `.env.example`.
 
 - `book_cases` — one row per book/case in the pilot: research fields (location,
   date/period, classification, source notes), the production pipeline status
-  (DISCOVERED → ... → PUBLISHED), Chairman/Chairwoman approval, factual + visual QA,
-  John's final review, Story Studio link/ID, Drive folder link, next action, notes
+  (DISCOVERED → ... → PUBLISHED), Chairman/Chairwoman approval (including the explicit
+  lock: `chairman_locked_at` / `chairman_approved_by`, set only via the lock-approval
+  endpoint, never a plain form save), factual + visual QA, John's final review, Story
+  Studio link/ID, Drive folder link, next action, notes
 - `threads` — chat threads, each optionally linked to one book/case, tagged with one
   of: Book / Case Research, Story Studio Prep, Publishing Package, HAD Content,
-  General Raven Ops
+  General Raven Ops. A thread linked to a case automatically gets that case's full
+  field state injected into Raven's context on every message — no re-pasting needed.
 - `messages` — messages within a thread
+- `story_packages` — the canonical Story Studio output per case (title, hook, summary,
+  and the full structured package as JSONB: facts, narrator/visual direction, scenes,
+  characters, short-form + publishing derivatives). One row per generation; the most
+  recent is canonical, older ones kept as history.
 - `settings` — two workspace-level links (Story Studio base URL, Drive workspace
   folder URL), editable from the Home screen
 - `handoff_log` — automatic, durable milestone trail per case (status changes,
   approvals, Story Studio dispatch/receipt, QA results) — no manual copying required
 
+## Automated pipeline handoffs
+
+- **Locking Chairman/Chairwoman approval** (`POST /api/book-cases/:id/lock-approval`,
+  distinct from the draft decision dropdown) records who approved it and when, and — if
+  Approved — auto-advances status to APPROVED and fills in any still-blank Book/Case
+  fields from the case's linked chat history (never overwrites existing data; never
+  invents facts not established in the conversation).
+- **Setting a case's status to STORY STUDIO** automatically calls Story Studio's own
+  `POST /api/ai/generate-story-project` (`server/story-studio.mjs`), stores the full
+  returned package, and advances status to STORY COMPLETE. Story Studio itself keeps no
+  server-side project record — this is what makes the package durable. A manual
+  Generate/Regenerate button on the Book detail page covers retries.
+- Every step above writes to `handoff_log` automatically, including why a step was
+  skipped (no Story Studio URL configured, no brief content yet, upstream error, etc).
+
 ## Gotchas
 
-- Story Studio and Google Drive are not rebuilt here — this app only stores links and
-  status flags for them.
+- Story Studio and Google Drive are not rebuilt here — Raven calls Story Studio's
+  existing generation endpoint directly and only stores links/status flags for Drive.
+- Story Studio's endpoint has no API-key/auth scheme of its own (verified by reading its
+  code) — it's only reachable because both apps are effectively internal to this
+  workspace; nothing new to provision, but don't expose it further.
 - A fresh database seeds one placeholder record, "Book 01 - Midwest Mystery Pilot",
   with no real research populated — it exists only to prove chat/case
   association/status persistence end to end.
