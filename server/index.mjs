@@ -2,8 +2,9 @@ import express from 'express'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import { get, all, run, logHandoff, getHandoffLog, initDb } from './db.mjs'
+import { get, all, run, logHandoff, getHandoffLog, initDb, saveStoryPackage, getLatestStoryPackage, getStoryPackages } from './db.mjs'
 import { generateRavenReply, extractCaseFields } from './raven-chat.mjs'
+import { generateStoryPackage } from './story-studio.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PORT = process.env.PORT || 5000
@@ -198,6 +199,14 @@ app.patch('/api/book-cases/:id', asyncHandler(async (req, res) => {
     await run(`UPDATE book_cases SET ${sets.join(', ')}, updated_at = @updatedAt WHERE id = @id`, params)
   }
   await logMilestoneChanges(req.params.id, existing, b)
+
+  // Reaching the STORY STUDIO stage is the pipeline's own signal that research/
+  // verification are done and the case is ready for Story Studio — dispatch
+  // automatically here rather than making John trigger it by hand (Issue #2).
+  if ('status' in b && b.status === 'STORY STUDIO' && existing.status !== 'STORY STUDIO') {
+    await dispatchToStoryStudio(req.params.id)
+  }
+
   res.json(serializeBookCase(await getBookCase(req.params.id)))
 }))
 
@@ -286,6 +295,63 @@ async function autoPopulateFromResearch(bookCaseId) {
     filled.length ? `Filled: ${filled.join(', ')}` : 'Nothing new to fill — existing fields already populated'
   )
 }
+
+// Story Studio itself keeps no server-side project record (its browser UI only holds
+// one in localStorage) — Raven calling it directly and storing the full result is what
+// makes the package durable, and removes the need for a human to paste a project
+// URL/ID back and forth. Best-effort: failures are logged, never thrown back to the
+// caller, so a Story Studio hiccup doesn't corrupt the case's own status/fields.
+async function dispatchToStoryStudio(bookCaseId) {
+  const bookCase = await getBookCase(bookCaseId)
+  const settings = await getSettings()
+  const brief = bookCase.story_brief && bookCase.story_brief.trim()
+    ? bookCase.story_brief
+    : [bookCase.working_title, bookCase.case_name, bookCase.location, bookCase.date_period, bookCase.source_notes]
+        .filter(Boolean).join(' — ')
+
+  try {
+    const project = await generateStoryPackage({ baseUrl: settings.storyStudioUrl, brief })
+    await saveStoryPackage(bookCaseId, project)
+    await logHandoff(bookCaseId, 'Story Studio package received', project.title || '(untitled package)')
+    const current = await getBookCase(bookCaseId)
+    if (current.status === 'STORY STUDIO') {
+      await run('UPDATE book_cases SET status = @status, updated_at = @updatedAt WHERE id = @id', { id: bookCaseId, status: 'STORY COMPLETE', updatedAt: now() })
+      await logHandoff(bookCaseId, 'Status changed', 'STORY STUDIO → STORY COMPLETE (auto-advanced on package receipt)')
+    }
+  } catch (err) {
+    await logHandoff(bookCaseId, err.skipped ? 'Story Studio dispatch skipped' : 'Story Studio dispatch failed', err.message)
+  }
+}
+
+app.post('/api/book-cases/:id/story-studio/generate', asyncHandler(async (req, res) => {
+  const existing = await getBookCase(req.params.id)
+  if (!existing) return res.status(404).json({ error: 'Book/case not found' })
+  await dispatchToStoryStudio(req.params.id)
+  res.json({
+    bookCase: serializeBookCase(await getBookCase(req.params.id)),
+    latestPackage: serializeStoryPackage(await getLatestStoryPackage(req.params.id)),
+  })
+}))
+
+function serializeStoryPackage(row) {
+  if (!row) return null
+  return {
+    id: row.id,
+    bookCaseId: row.book_case_id,
+    title: row.title,
+    hook: row.hook,
+    summary: row.summary,
+    package: row.package_data,
+    createdAt: row.created_at,
+  }
+}
+
+app.get('/api/book-cases/:id/story-packages', asyncHandler(async (req, res) => {
+  const existing = await getBookCase(req.params.id)
+  if (!existing) return res.status(404).json({ error: 'Book/case not found' })
+  const rows = await getStoryPackages(req.params.id)
+  res.json(rows.map(serializeStoryPackage))
+}))
 
 app.get('/api/book-cases/:id/handoff-log', asyncHandler(async (req, res) => {
   const existing = await getBookCase(req.params.id)

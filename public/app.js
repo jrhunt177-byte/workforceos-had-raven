@@ -49,6 +49,8 @@ const api_ = {
   lockApproval: (id, data) => api(`/api/book-cases/${id}/lock-approval`, { method: 'POST', body: JSON.stringify(data) }),
   deleteBookCase: (id) => api(`/api/book-cases/${id}`, { method: 'DELETE' }),
   handoffLog: (id) => api(`/api/book-cases/${id}/handoff-log`),
+  storyPackages: (id) => api(`/api/book-cases/${id}/story-packages`),
+  generateStoryPackage: (id) => api(`/api/book-cases/${id}/story-studio/generate`, { method: 'POST' }),
   patchSettings: (data) => api('/api/settings', { method: 'PATCH', body: JSON.stringify(data) }),
 }
 
@@ -275,6 +277,8 @@ async function renderBookDetail(id) {
   const linkedThreads = state.threads.filter((t) => t.bookCaseId === b.id)
   const isPilotSlot = b.number >= 1 && b.number <= 12
   const handoffLog = await api_.handoffLog(id)
+  const storyPackages = await api_.storyPackages(id)
+  const latestPackage = storyPackages[0] || null
 
   $main.innerHTML = `
     <div class="spread" style="margin-bottom:12px;">
@@ -330,6 +334,20 @@ async function renderBookDetail(id) {
       <div class="checkbox-field"><input type="checkbox" id="f-storyStudioSent" ${b.storyStudioSent ? 'checked' : ''} /><label for="f-storyStudioSent">Sent to Story Studio</label></div>
       <div class="checkbox-field"><input type="checkbox" id="f-storyStudioApproved" ${b.storyStudioApproved ? 'checked' : ''} /><label for="f-storyStudioApproved">Story Studio Output Approved</label></div>
       <a class="btn btn-sm" href="${b.storyStudioUrl ? esc(b.storyStudioUrl) : esc(state.settings.storyStudioUrl || '#')}" target="_blank" rel="noopener">Open Story Studio ↗</a>
+    </div>
+
+    <div class="card">
+      <div class="spread">
+        <div class="section-title" style="margin-bottom:0;">Story Package (Story Studio)</div>
+        <button class="btn btn-sm" id="generatePackageBtn" type="button">${latestPackage ? 'Regenerate' : 'Generate'} Story Package</button>
+      </div>
+      <div class="muted" style="margin:6px 0;font-size:0.8rem;">Raven calls Story Studio directly and stores the full canonical package here — no manual copy/paste. Auto-runs once when this case's status is set to STORY STUDIO.</div>
+      ${latestPackage ? `
+        <div class="field"><label>Title</label><div>${esc(latestPackage.title || '(untitled)')}</div></div>
+        ${latestPackage.hook ? `<div class="field"><label>Hook</label><div>${esc(latestPackage.hook)}</div></div>` : ''}
+        ${latestPackage.summary ? `<div class="field"><label>Summary</label><div>${esc(latestPackage.summary)}</div></div>` : ''}
+        <div class="muted" style="font-size:0.75rem;">Generated ${esc(new Date(latestPackage.createdAt).toLocaleString())} · Facts, scenes, characters, short-form + publishing derivatives stored with this package.</div>
+      ` : '<div class="muted">No package generated yet.</div>'}
     </div>
 
     <div class="card">
@@ -442,6 +460,18 @@ async function renderBookDetail(id) {
     const idx = state.bookCases.findIndex((x) => x.id === b.id)
     state.bookCases[idx] = updated
     renderBookDetail(b.id)
+  })
+
+  $main.querySelector('#generatePackageBtn').addEventListener('click', async () => {
+    const btn = $main.querySelector('#generatePackageBtn')
+    if (!confirm(latestPackage ? 'Regenerate the story package? This calls Story Studio again and adds a new version — the old one stays in history.' : 'Generate the story package now via Story Studio?')) return
+    btn.disabled = true
+    btn.textContent = 'Generating…'
+    try {
+      await api_.generateStoryPackage(b.id)
+    } finally {
+      renderBookDetail(b.id)
+    }
   })
 
   $main.querySelector('#lockApprovalBtn').addEventListener('click', async () => {

@@ -143,6 +143,23 @@ export async function ensureSchema() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_handoff_log_case ON handoff_log(book_case_id, created_at);
+
+    -- One canonical story package per generation, keyed to the book/case. Story Studio
+    -- itself keeps no server-side record of a project (its browser UI only holds one in
+    -- localStorage), so this table is where the generated package durably lives. The
+    -- most recent row for a case is its current canonical package; older rows are kept
+    -- as history rather than overwritten.
+    CREATE TABLE IF NOT EXISTS story_packages (
+      id TEXT PRIMARY KEY,
+      book_case_id TEXT NOT NULL REFERENCES book_cases(id) ON DELETE CASCADE,
+      title TEXT NOT NULL DEFAULT '',
+      hook TEXT NOT NULL DEFAULT '',
+      summary TEXT NOT NULL DEFAULT '',
+      package_data JSONB NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_story_packages_case ON story_packages(book_case_id, created_at);
   `)
 
   // Migrate book_cases created before later fields existed — additive only.
@@ -232,6 +249,31 @@ export async function logHandoff(bookCaseId, milestone, detail = '') {
 
 export async function getHandoffLog(bookCaseId) {
   return all('SELECT * FROM handoff_log WHERE book_case_id = ? ORDER BY created_at ASC', bookCaseId)
+}
+
+export async function saveStoryPackage(bookCaseId, project) {
+  const id = 'pkg-' + Math.random().toString(36).slice(2, 10)
+  await run(
+    'INSERT INTO story_packages (id, book_case_id, title, hook, summary, package_data, created_at) VALUES (@id, @bookCaseId, @title, @hook, @summary, @packageData, @createdAt)',
+    {
+      id,
+      bookCaseId,
+      title: project.title || '',
+      hook: project.hook || '',
+      summary: project.summary || '',
+      packageData: JSON.stringify(project),
+      createdAt: new Date().toISOString(),
+    }
+  )
+  return id
+}
+
+export async function getLatestStoryPackage(bookCaseId) {
+  return get('SELECT * FROM story_packages WHERE book_case_id = ? ORDER BY created_at DESC LIMIT 1', bookCaseId)
+}
+
+export async function getStoryPackages(bookCaseId) {
+  return all('SELECT * FROM story_packages WHERE book_case_id = ? ORDER BY created_at DESC', bookCaseId)
 }
 
 export default { get, all, run }
