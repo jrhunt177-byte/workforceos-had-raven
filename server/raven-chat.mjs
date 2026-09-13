@@ -108,3 +108,68 @@ export async function generateRavenReply({
   }
   return text
 }
+
+const EXTRACTABLE_FIELDS = [
+  'workingTitle', 'caseName', 'location', 'datePeriod', 'region',
+  'classification', 'verificationStatus', 'verificationDate', 'sourceNotes', 'storyBrief',
+]
+
+const EXTRACTION_INSTRUCTION = `Based only on the conversation above, extract what is actually established about this book/case as a single strict JSON object with exactly these keys: ${EXTRACTABLE_FIELDS.join(', ')}.
+
+Rules:
+- Use "" for any field not clearly established in the conversation — never invent or guess.
+- "classification" must be one of "Confirmed", "Reported", "Disputed", "Theory", or "" if the case isn't classified yet.
+- "verificationDate" must be an ISO date (YYYY-MM-DD) or "".
+- "sourceNotes" is a short semicolon-separated list of sources mentioned.
+- "storyBrief" is one concise paragraph, Story Studio-ready, or "" if there isn't enough to summarize yet.
+- Output ONLY the JSON object. No markdown fences, no commentary, no leading or trailing text.`
+
+/**
+ * Best-effort structured extraction from a case's chat history, used to auto-populate
+ * the Book/Case form once the Chairman/Chairwoman locks an Approved decision — so John
+ * doesn't have to retype research Raven already gathered in conversation. Never invents
+ * facts: the model is instructed to leave a field blank rather than guess, and this
+ * function only ever fills fields the caller confirms are still blank.
+ */
+export async function extractCaseFields({
+  apiKey,
+  model = DEFAULT_MODEL,
+  maxTokens = 1024,
+  messages = [],
+  fetchImpl = fetch,
+} = {}) {
+  if (!apiKey) return { fields: null, skipped: 'no ANTHROPIC_API_KEY configured' }
+  if (!messages.length) return { fields: null, skipped: 'no linked chat history to extract from' }
+
+  const response = await fetchImpl(ANTHROPIC_MESSAGES_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': ANTHROPIC_VERSION,
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: maxTokens,
+      system: 'You extract structured case facts as strict JSON. You never fabricate — leave a field blank rather than guess.',
+      messages: [...toAnthropicMessages(messages), { role: 'user', content: EXTRACTION_INSTRUCTION }],
+    }),
+  })
+  if (!response.ok) {
+    return { fields: null, skipped: `extraction call failed upstream (${response.status})` }
+  }
+  const body = await response.json()
+  const text = (body.content || []).filter((block) => block.type === 'text').map((block) => block.text).join('\n').trim()
+  const jsonText = text.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim()
+  let parsed
+  try {
+    parsed = JSON.parse(jsonText)
+  } catch {
+    return { fields: null, skipped: 'model did not return valid JSON' }
+  }
+  const fields = {}
+  for (const key of EXTRACTABLE_FIELDS) {
+    if (typeof parsed[key] === 'string' && parsed[key].trim()) fields[key] = parsed[key].trim()
+  }
+  return { fields, skipped: null }
+}

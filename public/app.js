@@ -46,8 +46,11 @@ const api_ = {
   sendMessage: (id, content) => api(`/api/threads/${id}/messages`, { method: 'POST', body: JSON.stringify({ content }) }),
   createBookCase: (data) => api('/api/book-cases', { method: 'POST', body: JSON.stringify(data) }),
   patchBookCase: (id, data) => api(`/api/book-cases/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  lockApproval: (id, data) => api(`/api/book-cases/${id}/lock-approval`, { method: 'POST', body: JSON.stringify(data) }),
   deleteBookCase: (id) => api(`/api/book-cases/${id}`, { method: 'DELETE' }),
   handoffLog: (id) => api(`/api/book-cases/${id}/handoff-log`),
+  storyPackages: (id) => api(`/api/book-cases/${id}/story-packages`),
+  generateStoryPackage: (id) => api(`/api/book-cases/${id}/story-studio/generate`, { method: 'POST' }),
   patchSettings: (data) => api('/api/settings', { method: 'PATCH', body: JSON.stringify(data) }),
 }
 
@@ -274,6 +277,8 @@ async function renderBookDetail(id) {
   const linkedThreads = state.threads.filter((t) => t.bookCaseId === b.id)
   const isPilotSlot = b.number >= 1 && b.number <= 12
   const handoffLog = await api_.handoffLog(id)
+  const storyPackages = await api_.storyPackages(id)
+  const latestPackage = storyPackages[0] || null
 
   $main.innerHTML = `
     <div class="spread" style="margin-bottom:12px;">
@@ -332,6 +337,20 @@ async function renderBookDetail(id) {
     </div>
 
     <div class="card">
+      <div class="spread">
+        <div class="section-title" style="margin-bottom:0;">Story Package (Story Studio)</div>
+        <button class="btn btn-sm" id="generatePackageBtn" type="button">${latestPackage ? 'Regenerate' : 'Generate'} Story Package</button>
+      </div>
+      <div class="muted" style="margin:6px 0;font-size:0.8rem;">Raven calls Story Studio directly and stores the full canonical package here — no manual copy/paste. Auto-runs once when this case's status is set to STORY STUDIO.</div>
+      ${latestPackage ? `
+        <div class="field"><label>Title</label><div>${esc(latestPackage.title || '(untitled)')}</div></div>
+        ${latestPackage.hook ? `<div class="field"><label>Hook</label><div>${esc(latestPackage.hook)}</div></div>` : ''}
+        ${latestPackage.summary ? `<div class="field"><label>Summary</label><div>${esc(latestPackage.summary)}</div></div>` : ''}
+        <div class="muted" style="font-size:0.75rem;">Generated ${esc(new Date(latestPackage.createdAt).toLocaleString())} · Facts, scenes, characters, short-form + publishing derivatives stored with this package.</div>
+      ` : '<div class="muted">No package generated yet.</div>'}
+    </div>
+
+    <div class="card">
       <div class="section-title">Drive</div>
       <div class="field"><label>Drive Folder URL</label><input id="f-driveFolderUrl" value="${esc(b.driveFolderUrl)}" /></div>
       ${b.driveFolderUrl ? `<a class="btn btn-sm" href="${esc(b.driveFolderUrl)}" target="_blank" rel="noopener">Open Drive Folder ↗</a>` : ''}
@@ -347,6 +366,17 @@ async function renderBookDetail(id) {
         </select>
       </div>
       <div class="field"><label>Chairman/Chairwoman Notes</label><textarea id="f-chairmanNotes">${esc(b.chairmanNotes)}</textarea></div>
+      ${b.chairmanLockedAt ? `
+        <div class="muted" style="margin-bottom:10px;">🔒 Locked: <strong>${esc(b.chairmanDecision)}</strong> by ${esc(b.chairmanApprovedBy)} on ${esc(new Date(b.chairmanLockedAt).toLocaleString())}</div>
+      ` : `
+        <div class="muted" style="margin-bottom:10px;">Not locked yet — the decision above is a draft until locked. Locking an Approved decision automatically advances the pipeline and pulls in whatever Raven has already researched.</div>
+      `}
+      <div class="grid grid-2">
+        <div class="field"><label>Your Name (required to lock)</label><input id="f-approverName" placeholder="e.g. John Hunt" /></div>
+        <div class="field" style="display:flex;align-items:flex-end;">
+          <button class="btn btn-gold btn-sm" id="lockApprovalBtn" type="button">Lock Approval</button>
+        </div>
+      </div>
       <div class="grid grid-2">
         <div class="field">
           <label>Factual QA</label>
@@ -429,6 +459,32 @@ async function renderBookDetail(id) {
     const updated = await api_.patchBookCase(b.id, collectFormData())
     const idx = state.bookCases.findIndex((x) => x.id === b.id)
     state.bookCases[idx] = updated
+    renderBookDetail(b.id)
+  })
+
+  $main.querySelector('#generatePackageBtn').addEventListener('click', async () => {
+    const btn = $main.querySelector('#generatePackageBtn')
+    if (!confirm(latestPackage ? 'Regenerate the story package? This calls Story Studio again and adds a new version — the old one stays in history.' : 'Generate the story package now via Story Studio?')) return
+    btn.disabled = true
+    btn.textContent = 'Generating…'
+    try {
+      await api_.generateStoryPackage(b.id)
+    } finally {
+      renderBookDetail(b.id)
+    }
+  })
+
+  $main.querySelector('#lockApprovalBtn').addEventListener('click', async () => {
+    const decision = $main.querySelector('#f-chairmanDecision').value
+    const notes = $main.querySelector('#f-chairmanNotes').value
+    const approverName = $main.querySelector('#f-approverName').value.trim()
+    if (!decision) { alert('Choose a decision (Approved / Rejected / Revise) before locking.'); return }
+    if (!approverName) { alert('Enter your name to lock this decision.'); return }
+    if (!confirm(`Lock this case as "${decision}" under the name "${approverName}"? ${decision === 'Approved' ? 'This will move the pipeline forward and auto-fill any blank fields from the research chat.' : ''}`)) return
+    const updated = await api_.patchBookCase(b.id, collectFormData())
+    const locked = await api_.lockApproval(b.id, { decision, notes, approverName })
+    const idx = state.bookCases.findIndex((x) => x.id === b.id)
+    state.bookCases[idx] = locked
     renderBookDetail(b.id)
   })
 
