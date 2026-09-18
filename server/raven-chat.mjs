@@ -22,6 +22,15 @@ You do not manage subcontractors, employees, or other agents. You may prepare pr
 
 Be concise, direct, and grounded in the case data given below. If something isn't in the data, say it isn't tracked yet rather than guessing — or search for it.`
 
+const LOCK_APPROVAL_CAPABILITY_NOTE = `
+
+### Chairman/Chairwoman approval, in this conversation
+You do not silently rewrite the Book/Case record from ordinary conversation, and you never decide approval yourself — only the Chairman or Chairwoman (John or Pia) approves, rejects, or asks for revisions on a candidate. But when one of them gives you an explicit, unambiguous instruction to lock a decision — for example "Approved, lock it in," "Lock this as Rejected," or "That's approved, go ahead and lock it" — you have a lock_case_approval tool and should use it yourself, tied to this conversation's linked book/case. Do not tell them someone else has to enter it manually; that capability now exists and you should use it.
+
+Locking Approved automatically fills in this case's blank Book/Case fields from what's established in this conversation and advances the pipeline — you don't do that part by hand.
+
+Only call the tool on an explicit lock instruction — never on your own initiative, and never from a merely positive or encouraging remark like "looks good" or "I like this" without an actual instruction to lock it. If you don't know who is giving the instruction, ask for their name first — the record keeps whoever approved it.`
+
 function formatCaseContext(bookCase) {
   if (!bookCase) return '\n\nThis conversation is not linked to a specific book/case record.'
   return [
@@ -45,8 +54,23 @@ function formatCaseContext(bookCase) {
   ].filter(Boolean).join('\n')
 }
 
-export function buildRavenSystemPrompt({ bookCase = null } = {}) {
-  return `${CHARTER}${formatCaseContext(bookCase)}`
+export function buildRavenSystemPrompt({ bookCase = null, canLockApproval = false } = {}) {
+  const capabilityNote = (bookCase && canLockApproval) ? LOCK_APPROVAL_CAPABILITY_NOTE : ''
+  return `${CHARTER}${formatCaseContext(bookCase)}${capabilityNote}`
+}
+
+const LOCK_APPROVAL_TOOL = {
+  name: 'lock_case_approval',
+  description: "Lock the Chairman/Chairwoman's decision on the book/case linked to this conversation. Only call this when the human gives an unambiguous, explicit instruction to approve/reject/revise AND lock/confirm it. Never call this on your own initiative, and never infer approval from a merely positive or encouraging remark.",
+  input_schema: {
+    type: 'object',
+    properties: {
+      decision: { type: 'string', enum: ['Approved', 'Rejected', 'Revise'], description: 'The Chairman/Chairwoman decision being locked.' },
+      approverName: { type: 'string', description: "The human's name. If it hasn't come up in this conversation and isn't otherwise clear, ask them for their name before calling this tool rather than guessing." },
+      notes: { type: 'string', description: 'Optional short note capturing the reasoning behind the decision.' },
+    },
+    required: ['decision', 'approverName'],
+  },
 }
 
 function toAnthropicMessages(history = []) {
@@ -56,25 +80,7 @@ function toAnthropicMessages(history = []) {
   }))
 }
 
-/**
- * Calls the Anthropic Messages API directly over HTTPS, matching the same provider-integration
- * convention used elsewhere in this product family. Fails closed when no key is configured
- * rather than returning a fabricated reply.
- */
-export async function generateRavenReply({
-  apiKey,
-  model = DEFAULT_MODEL,
-  maxTokens = DEFAULT_MAX_TOKENS,
-  bookCase = null,
-  history = [],
-  fetchImpl = fetch,
-} = {}) {
-  if (!apiKey) {
-    const error = new Error('Raven chat is not configured — no Anthropic API key is set')
-    error.statusCode = 503
-    throw error
-  }
-  const system = buildRavenSystemPrompt({ bookCase })
+async function callAnthropic({ apiKey, model, maxTokens, system, messages, tools, fetchImpl }) {
   const response = await fetchImpl(ANTHROPIC_MESSAGES_URL, {
     method: 'POST',
     headers: {
@@ -82,15 +88,7 @@ export async function generateRavenReply({
       'x-api-key': apiKey,
       'anthropic-version': ANTHROPIC_VERSION,
     },
-    body: JSON.stringify({
-      model,
-      max_tokens: maxTokens,
-      system,
-      messages: toAnthropicMessages(history),
-      tools: [
-        { type: 'web_search_20260209', name: 'web_search', max_uses: WEB_SEARCH_MAX_USES },
-      ],
-    }),
+    body: JSON.stringify({ model, max_tokens: maxTokens, system, messages, tools }),
   })
   if (!response.ok) {
     const bodyText = await response.text().catch(() => '')
@@ -99,14 +97,80 @@ export async function generateRavenReply({
     error.upstreamBody = bodyText.slice(0, 500)
     throw error
   }
-  const body = await response.json()
-  const text = (body.content || []).filter((block) => block.type === 'text').map((block) => block.text).join('\n').trim()
-  if (!text) {
-    const error = new Error('Raven chat returned an empty reply')
-    error.statusCode = 502
+  return response.json()
+}
+
+const MAX_TOOL_ROUNDS = 4
+
+/**
+ * Calls the Anthropic Messages API directly over HTTPS, matching the same provider-integration
+ * convention used elsewhere in this product family. Fails closed when no key is configured
+ * rather than returning a fabricated reply.
+ *
+ * When a linked book/case and an onLockApproval callback are both given, Raven is offered a
+ * lock_case_approval tool and can execute an explicit, unambiguous lock instruction herself
+ * instead of just describing it. web_search is a server-hosted Anthropic tool (executed inside
+ * the same response, no local handling needed); lock_case_approval is a client tool — when
+ * Claude calls it, we run the callback, feed the result back as a tool_result, and let Claude
+ * produce its real final reply from that outcome.
+ */
+export async function generateRavenReply({
+  apiKey,
+  model = DEFAULT_MODEL,
+  maxTokens = DEFAULT_MAX_TOKENS,
+  bookCase = null,
+  history = [],
+  onLockApproval = null,
+  fetchImpl = fetch,
+} = {}) {
+  if (!apiKey) {
+    const error = new Error('Raven chat is not configured — no Anthropic API key is set')
+    error.statusCode = 503
     throw error
   }
-  return text
+  const canLockApproval = !!(bookCase && onLockApproval)
+  const system = buildRavenSystemPrompt({ bookCase, canLockApproval })
+  const tools = [{ type: 'web_search_20260209', name: 'web_search', max_uses: WEB_SEARCH_MAX_USES }]
+  if (canLockApproval) tools.push(LOCK_APPROVAL_TOOL)
+
+  const messages = toAnthropicMessages(history)
+  let lockResult = null
+
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    const body = await callAnthropic({ apiKey, model, maxTokens, system, messages, tools, fetchImpl })
+    const toolUseBlocks = (body.content || []).filter((block) => block.type === 'tool_use')
+
+    if (!toolUseBlocks.length) {
+      const text = (body.content || []).filter((block) => block.type === 'text').map((block) => block.text).join('\n').trim()
+      if (!text) {
+        const error = new Error('Raven chat returned an empty reply')
+        error.statusCode = 502
+        throw error
+      }
+      return { text, lockResult }
+    }
+
+    messages.push({ role: 'assistant', content: body.content })
+    const toolResults = []
+    for (const block of toolUseBlocks) {
+      if (block.name === 'lock_case_approval' && onLockApproval) {
+        try {
+          const outcome = await onLockApproval(block.input)
+          lockResult = { input: block.input, outcome }
+          toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: outcome.message })
+        } catch (err) {
+          toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: `Could not lock this decision: ${err.message}`, is_error: true })
+        }
+      } else {
+        toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: 'This tool is not available.', is_error: true })
+      }
+    }
+    messages.push({ role: 'user', content: toolResults })
+  }
+
+  const error = new Error('Raven chat did not produce a final reply after tool use')
+  error.statusCode = 502
+  throw error
 }
 
 const EXTRACTABLE_FIELDS = [

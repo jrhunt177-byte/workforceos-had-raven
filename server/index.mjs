@@ -2,7 +2,7 @@ import express from 'express'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import { get, all, run, logHandoff, getHandoffLog, initDb, saveStoryPackage, getLatestStoryPackage, getStoryPackages } from './db.mjs'
+import { get, all, run, logHandoff, getHandoffLog, initDb, saveStoryPackage, getLatestStoryPackage, getStoryPackages, SEED_PLACEHOLDER_TEXT } from './db.mjs'
 import { generateRavenReply, extractCaseFields } from './raven-chat.mjs'
 import { generateStoryPackage } from './story-studio.mjs'
 
@@ -215,43 +215,72 @@ app.patch('/api/book-cases/:id', asyncHandler(async (req, res) => {
 // are excluded from BOOK_CASE_FIELD_MAP so a lock can only happen here, never as a side
 // effect of an ordinary form save. Locking APPROVED is what triggers the downstream
 // automation the Architect specified (Issue #2): auto-populate blank fields from the
-// case's linked research chat, and advance status into the pipeline.
-app.post('/api/book-cases/:id/lock-approval', asyncHandler(async (req, res) => {
-  const existing = await getBookCase(req.params.id)
-  if (!existing) return res.status(404).json({ error: 'Book/case not found' })
-  const b = req.body || {}
-  const decision = b.decision
-  const approverName = (b.approverName || '').trim()
-  if (!CHAIRMAN_DECISIONS.includes(decision)) {
-    return res.status(400).json({ error: `decision must be one of: ${CHAIRMAN_DECISIONS.join(', ')}` })
+// case's linked research chat, and advance status into the pipeline. Shared by the
+// Book Details "Lock Approval" button and Raven's lock_case_approval chat tool (Issue #2,
+// 2026-09-17) so both paths run exactly the same logic — nothing chat-only or UI-only.
+async function lockCaseApproval(bookCaseId, { decision, notes, approverName, threadId = null } = {}) {
+  const existing = await getBookCase(bookCaseId)
+  if (!existing) {
+    const error = new Error('Book/case not found')
+    error.statusCode = 404
+    throw error
   }
-  if (!approverName) {
-    return res.status(400).json({ error: 'approverName is required to lock a decision' })
+  const trimmedApprover = (approverName || '').trim()
+  if (!CHAIRMAN_DECISIONS.includes(decision)) {
+    const error = new Error(`decision must be one of: ${CHAIRMAN_DECISIONS.join(', ')}`)
+    error.statusCode = 400
+    throw error
+  }
+  if (!trimmedApprover) {
+    const error = new Error('approverName is required to lock a decision')
+    error.statusCode = 400
+    throw error
   }
 
   const lockedAt = now()
   await run(
     'UPDATE book_cases SET chairman_decision = @decision, chairman_notes = @notes, chairman_locked_at = @lockedAt, chairman_approved_by = @approverName, updated_at = @lockedAt WHERE id = @id',
-    { id: req.params.id, decision, notes: b.notes ?? existing.chairman_notes, lockedAt, approverName }
+    { id: bookCaseId, decision, notes: notes ?? existing.chairman_notes, lockedAt, approverName: trimmedApprover }
   )
-  await logHandoff(req.params.id, 'Chairman/Chairwoman decision LOCKED', `${decision} by ${approverName}${b.notes ? `: ${b.notes}` : ''}`)
+  await logHandoff(bookCaseId, 'Chairman/Chairwoman decision LOCKED', `${decision} by ${trimmedApprover}${notes ? `: ${notes}` : ''}`)
+
+  // Bind the thread this lock came from, if any and if it isn't already linked to a
+  // *different* case — only ever fills in a blank link, never silently reassigns one.
+  if (threadId) {
+    const thread = await getThread(threadId)
+    if (thread && !thread.book_case_id) {
+      await run('UPDATE threads SET book_case_id = @bookCaseId, updated_at = @updatedAt WHERE id = @id', { id: threadId, bookCaseId, updatedAt: now() })
+      await logHandoff(bookCaseId, 'Thread linked to case', `"${thread.title}" linked automatically on approval lock`)
+    }
+  }
 
   if (decision === 'Approved') {
     const currentIdx = STATUSES.indexOf(existing.status)
     const approvedIdx = STATUSES.indexOf('APPROVED')
     if (currentIdx < approvedIdx) {
-      await run('UPDATE book_cases SET status = @status, updated_at = @updatedAt WHERE id = @id', { id: req.params.id, status: 'APPROVED', updatedAt: now() })
-      await logHandoff(req.params.id, 'Status changed', `${existing.status} → APPROVED (auto-advanced on locked approval)`)
+      await run('UPDATE book_cases SET status = @status, updated_at = @updatedAt WHERE id = @id', { id: bookCaseId, status: 'APPROVED', updatedAt: now() })
+      await logHandoff(bookCaseId, 'Status changed', `${existing.status} → APPROVED (auto-advanced on locked approval)`)
     }
-    await autoPopulateFromResearch(req.params.id)
+    await autoPopulateFromResearch(bookCaseId)
   }
 
-  res.json(serializeBookCase(await getBookCase(req.params.id)))
+  return serializeBookCase(await getBookCase(bookCaseId))
+}
+
+app.post('/api/book-cases/:id/lock-approval', asyncHandler(async (req, res) => {
+  const b = req.body || {}
+  try {
+    const result = await lockCaseApproval(req.params.id, b)
+    res.json(result)
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message })
+  }
 }))
 
-// Best-effort: fills only fields still blank, from whatever's been discussed in threads
-// already linked to this case. Never overwrites data John or Raven already entered, and
-// never invents facts — extractCaseFields leaves anything not clearly established blank.
+// Best-effort: fills blank fields, and also replaces this app's own known seed/
+// placeholder text (SEED_PLACEHOLDER_TEXT, from db.mjs) since that's not real content
+// either — but never touches anything else already entered, and never invents facts —
+// extractCaseFields leaves anything not clearly established blank.
 async function autoPopulateFromResearch(bookCaseId) {
   const bookCase = await getBookCase(bookCaseId)
   const threads = await all('SELECT id FROM threads WHERE book_case_id = ? ORDER BY updated_at ASC', bookCaseId)
@@ -281,7 +310,8 @@ async function autoPopulateFromResearch(bookCaseId) {
   for (const [key, column] of Object.entries(BOOK_CASE_FIELD_MAP)) {
     if (!(key in fields)) continue
     const currentValue = bookCase[column]
-    if (currentValue && String(currentValue).trim()) continue // never overwrite existing data
+    const isPlaceholder = SEED_PLACEHOLDER_TEXT[key] && currentValue === SEED_PLACEHOLDER_TEXT[key]
+    if (currentValue && String(currentValue).trim() && !isPlaceholder) continue // never overwrite real data
     sets.push(`${column} = @${key}`)
     params[key] = fields[key]
     filled.push(key)
@@ -477,10 +507,23 @@ app.post('/api/threads/:id/messages', asyncHandler(async (req, res) => {
   const bookCase = thread.book_case_id ? await getBookCase(thread.book_case_id) : null
 
   try {
-    const replyText = await generateRavenReply({
+    const { text: replyText } = await generateRavenReply({
       apiKey: process.env.ANTHROPIC_API_KEY,
       bookCase,
       history: history.map((m) => ({ role: m.role, content: m.content })),
+      onLockApproval: bookCase ? async (input) => {
+        try {
+          const updated = await lockCaseApproval(bookCase.id, {
+            decision: input.decision,
+            notes: input.notes,
+            approverName: input.approverName,
+            threadId: thread.id,
+          })
+          return { message: `Locked as ${updated.chairmanDecision} by ${updated.chairmanApprovedBy}. Status is now ${updated.status}.` }
+        } catch (err) {
+          throw new Error(err.message)
+        }
+      } : null,
     })
     const ravenMessage = {
       id: randomUUID(),
