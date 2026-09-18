@@ -72,9 +72,18 @@ See `.env.example`.
 
 - **Locking Chairman/Chairwoman approval** (`POST /api/book-cases/:id/lock-approval`,
   distinct from the draft decision dropdown) records who approved it and when, and — if
-  Approved — auto-advances status to APPROVED and fills in any still-blank Book/Case
-  fields from the case's linked chat history (never overwrites existing data; never
-  invents facts not established in the conversation).
+  Approved — auto-advances status to APPROVED and fills in any still-blank (or known
+  placeholder — `SEED_PLACEHOLDER_TEXT` in `server/db.mjs`) Book/Case fields from the
+  case's linked chat history. Never overwrites real existing data; never invents facts
+  not established in the conversation. `lockCaseApproval()` in `server/index.mjs` is the
+  single shared implementation — both this HTTP route and Raven's chat tool below call it.
+- **Raven can lock approval conversationally.** When a thread is linked to a case and the
+  human gives an explicit, unambiguous instruction ("Approved, lock it in"), Raven calls a
+  `lock_case_approval` tool (real Anthropic tool-use, `server/raven-chat.mjs`) that runs
+  the exact same logic as the HTTP endpoint, tied to that conversation's case, and binds
+  the thread to the case first if it wasn't already linked. She never does this from an
+  ordinary positive remark, and never decides approval herself — only executes an explicit
+  human instruction. Her system prompt is explicit that she can't otherwise mutate records.
 - **Setting a case's status to STORY STUDIO** automatically calls Story Studio's own
   `POST /api/ai/generate-story-project` (`server/story-studio.mjs`), stores the full
   returned package, and advances status to STORY COMPLETE. Story Studio itself keeps no

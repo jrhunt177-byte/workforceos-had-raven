@@ -49,6 +49,15 @@ function randomId() {
   return 'seed-' + Math.random().toString(36).slice(2, 10)
 }
 
+// Exact seed/placeholder text this app itself writes on first boot (Book 01's slot).
+// Exported so the auto-populate-on-approval logic can recognize and safely overwrite
+// this specific placeholder content without needing to guess at "does this look real."
+export const SEED_PLACEHOLDER_TEXT = {
+  workingTitle: 'Book 01 - Midwest Mystery Pilot',
+  nextAction: 'Placeholder/test record — begin research when ready.',
+  notes: 'Placeholder/test record only. Not populated with real research.',
+}
+
 // The Architect bridge (Issue #2) supersedes the old status vocabulary with a full
 // production pipeline. Remap any existing rows so nothing is stuck on a retired value.
 const STATUS_MIGRATION = {
@@ -210,11 +219,11 @@ export async function initDb() {
         verification_status, verification_date, story_studio_url, story_studio_project_id,
         story_studio_sent, story_studio_approved, drive_folder_url, next_action, notes,
         created_at, updated_at
-      ) VALUES ($1, 1, 'Book 01 - Midwest Mystery Pilot', '', '', 'DISCOVERED', FALSE,
+      ) VALUES ($1, 1, $2, '', '', 'DISCOVERED', FALSE,
         '', '', '', '',
-        FALSE, FALSE, '', 'Placeholder/test record — begin research when ready.',
-        'Placeholder/test record only. Not populated with real research.', $2, $3)
-    `, [randomId(), seedTs, seedTs])
+        FALSE, FALSE, '', $3,
+        $4, $5, $6)
+    `, [randomId(), SEED_PLACEHOLDER_TEXT.workingTitle, SEED_PLACEHOLDER_TEXT.nextAction, SEED_PLACEHOLDER_TEXT.notes, seedTs, seedTs])
   }
 
   // The pilot is fixed at 12 books. Fill in any missing slot numbers 1-12 as empty,
