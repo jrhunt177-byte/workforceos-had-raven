@@ -58,7 +58,9 @@ button, input, textarea, select {
   cursor: pointer;
 }
 
-.brand { display: flex; flex-direction: column; line-height: 1.1; margin-right: auto; }
+.brand { display: flex; align-items: center; gap: 8px; margin-right: auto; }
+.brand-logo { height: 28px; width: auto; display: block; object-fit: contain; }
+.brand-text { display: flex; flex-direction: column; line-height: 1.1; }
 .brand-name { color: var(--gold); font-weight: 700; letter-spacing: 0.12em; font-size: 0.95rem; }
 .brand-sub { color: var(--text-muted); font-size: 0.72rem; }
 
@@ -263,8 +265,11 @@ button, input, textarea, select {
 /* ---- home dashboard ---- */
 
 .identity-card { display: flex; flex-direction: column; gap: 4px; }
+.identity-header { display: flex; align-items: center; gap: 14px; }
+.identity-logo { height: 48px; width: auto; object-fit: contain; flex-shrink: 0; }
 .identity-name { font-size: 1.6rem; color: var(--gold); font-weight: 700; }
 .identity-role { color: var(--text-muted); }
+.identity-org { color: var(--text-muted); font-size: 0.78rem; margin-top: 2px; }
 
 .progress-track {
   width: 100%;

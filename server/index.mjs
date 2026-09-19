@@ -584,7 +584,9 @@ app.get('/api/bootstrap', asyncHandler(async (req, res) => {
   res.json({
     identity: {
       name: 'Raven',
-      role: 'Phase-1 Operator, PublishingOS',
+      role: 'HAD-001 · Media Manager & Distribution Director',
+      org: 'PublishingOS / Hunt After DarkOS',
+      reportsTo: 'Chairwoman Pia Hunt',
       assignment: ASSIGNMENT,
     },
     pilot: {

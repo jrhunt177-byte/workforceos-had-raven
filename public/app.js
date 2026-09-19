@@ -148,8 +148,14 @@ function renderHome() {
 
   $main.innerHTML = `
     <div class="card identity-card">
-      <div class="identity-name">${esc(identity.name)}</div>
-      <div class="identity-role">${esc(identity.role)}</div>
+      <div class="identity-header">
+        <img class="identity-logo" src="brand/logo.png" alt="" onerror="this.style.display='none'" />
+        <div>
+          <div class="identity-name">${esc(identity.name)}</div>
+          <div class="identity-role">${esc(identity.role)}</div>
+          ${identity.org ? `<div class="identity-org">${esc(identity.org)}${identity.reportsTo ? ' · Reports to ' + esc(identity.reportsTo) : ''}</div>` : ''}
+        </div>
+      </div>
       <div style="margin-top:14px;">
         <div class="spread">
           <span>${esc(pilot.name)}</span>
