@@ -343,6 +343,7 @@ async function dispatchToStoryStudio(bookCaseId) {
     const project = await generateStoryPackage({ baseUrl: settings.storyStudioUrl, brief })
     await saveStoryPackage(bookCaseId, project)
     await logHandoff(bookCaseId, 'Story Studio package received', project.title || '(untitled package)')
+    await spreadStoryPackageIntoBookCase(bookCaseId, project)
     const current = await getBookCase(bookCaseId)
     if (current.status === 'STORY STUDIO') {
       await run('UPDATE book_cases SET status = @status, updated_at = @updatedAt WHERE id = @id', { id: bookCaseId, status: 'STORY COMPLETE', updatedAt: now() })
@@ -350,6 +351,37 @@ async function dispatchToStoryStudio(bookCaseId) {
     }
   } catch (err) {
     await logHandoff(bookCaseId, err.skipped ? 'Story Studio dispatch skipped' : 'Story Studio dispatch failed', err.message)
+  }
+}
+
+// The full package always lives in story_packages (JSONB) — this is the smaller,
+// separate step of also reflecting its headline fields into the Book Details record
+// itself, so John sees the professionally-packaged title/synopsis there without
+// having to open the package. Title only fills a still-blank/placeholder slot (never
+// overwrites something already named); storyBrief is deliberately always refreshed to
+// Story Studio's summary, since arriving here means the case just moved through an
+// approved pipeline stage that specifically produces a more authoritative synopsis.
+async function spreadStoryPackageIntoBookCase(bookCaseId, project) {
+  const bookCase = await getBookCase(bookCaseId)
+  const sets = []
+  const params = { id: bookCaseId, updatedAt: now() }
+  const changed = []
+
+  const titleIsPlaceholder = SEED_PLACEHOLDER_TEXT.workingTitle && bookCase.working_title === SEED_PLACEHOLDER_TEXT.workingTitle
+  if (project.title && (!bookCase.working_title?.trim() || titleIsPlaceholder)) {
+    sets.push('working_title = @workingTitle')
+    params.workingTitle = project.title
+    changed.push('workingTitle')
+  }
+  if (project.summary) {
+    sets.push('story_brief = @storyBrief')
+    params.storyBrief = project.summary
+    changed.push('storyBrief')
+  }
+
+  if (sets.length) {
+    await run(`UPDATE book_cases SET ${sets.join(', ')}, updated_at = @updatedAt WHERE id = @id`, params)
+    await logHandoff(bookCaseId, 'Story Studio fields applied to Book Details', `Updated: ${changed.join(', ')}`)
   }
 }
 
