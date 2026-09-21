@@ -88,7 +88,18 @@ See `.env.example`.
   `POST /api/ai/generate-story-project` (`server/story-studio.mjs`), stores the full
   returned package, and advances status to STORY COMPLETE. Story Studio itself keeps no
   server-side project record — this is what makes the package durable. A manual
-  Generate/Regenerate button on the Book detail page covers retries.
+  Generate/Regenerate button on the Book detail page covers retries. On a successful
+  dispatch, `spreadStoryPackageIntoBookCase()` also reflects the package's title and
+  refined synopsis into `working_title`/`story_brief` on the Book Details record itself
+  (title only if blank/placeholder; synopsis always refreshed, since arriving here means
+  the case just cleared an approved stage that produces a more authoritative one).
+- **Approving a book auto-starts research on the next one** (`maybeSeedNextBook()`) —
+  the 12-book queue doesn't wait on one book at a time. If the next numbered slot is
+  still empty and has no research thread yet, locking Approved creates one, sends Raven
+  a real kickoff prompt (grounded in her normal web-search charter — never scripted
+  placeholder content), and advances that slot to AWAITING APPROVAL once she proposes a
+  candidate. Idempotent: a slot that already has a thread never gets a second one, so
+  re-approving/re-locking a book is always safe to repeat.
 - Every step above writes to `handoff_log` automatically, including why a step was
   skipped (no Story Studio URL configured, no brief content yet, upstream error, etc).
 

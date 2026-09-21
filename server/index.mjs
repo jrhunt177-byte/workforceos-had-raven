@@ -262,6 +262,7 @@ async function lockCaseApproval(bookCaseId, { decision, notes, approverName, thr
       await logHandoff(bookCaseId, 'Status changed', `${existing.status} → APPROVED (auto-advanced on locked approval)`)
     }
     await autoPopulateFromResearch(bookCaseId)
+    await maybeSeedNextBook(bookCaseId)
   }
 
   return serializeBookCase(await getBookCase(bookCaseId))
@@ -324,6 +325,50 @@ async function autoPopulateFromResearch(bookCaseId) {
     'Auto-populated from research chat',
     filled.length ? `Filled: ${filled.join(', ')}` : 'Nothing new to fill — existing fields already populated'
   )
+}
+
+// Standing conveyor rule (Issue #2, 2026-09-20): the pilot queue shouldn't sit idle
+// waiting on one book at a time. When a case is approved, this kicks off real research
+// on the next empty slot automatically — via an actual grounded Raven conversation
+// (web search, same charter as everywhere else), never by scripting in invented case
+// content. Idempotent: only fires when the next slot is both empty and has no research
+// thread yet, so re-approving/re-locking the same book never double-fires it.
+async function maybeSeedNextBook(justApprovedBookCaseId) {
+  const justApproved = await getBookCase(justApprovedBookCaseId)
+  if (!justApproved.number || justApproved.number < 1 || justApproved.number >= PILOT_TOTAL) return
+
+  const nextNumber = justApproved.number + 1
+  const nextBook = await get('SELECT * FROM book_cases WHERE number = ?', nextNumber)
+  if (!nextBook) return
+  const isEmpty = !nextBook.working_title?.trim() && !nextBook.case_name?.trim()
+  if (!isEmpty) return
+  const existingThreads = await all('SELECT id FROM threads WHERE book_case_id = ?', nextBook.id)
+  if (existingThreads.length) return // research already underway on this slot
+
+  const ts = now()
+  const threadId = randomUUID()
+  await run(
+    'INSERT INTO threads (id, title, tag, book_case_id, created_at, updated_at) VALUES (@id, @title, @tag, @bookCaseId, @createdAt, @updatedAt)',
+    { id: threadId, title: `Book ${String(nextNumber).padStart(2, '0')} — candidate research`, tag: 'Book / Case Research', bookCaseId: nextBook.id, createdAt: ts, updatedAt: ts }
+  )
+  const kickoffPrompt = `Book ${justApproved.number} was just approved and is moving into production. Per the Midwest 12-Book Pilot mission, research and propose the next candidate for Book ${nextNumber}: a real, verifiable Midwest unsolved mystery not already used elsewhere in this pilot. Use live web search to ground the proposal in real sources — do not invent details. Give a concise candidate brief: working title, location, date/period, a short synopsis, and your initial source(s), each claim labeled Confirmed/Reported/Disputed/Theory.`
+  const kickoffMessage = { id: randomUUID(), thread_id: threadId, role: 'user', content: kickoffPrompt, created_at: now() }
+  await run('INSERT INTO messages (id, thread_id, role, content, created_at) VALUES (@id, @thread_id, @role, @content, @created_at)', kickoffMessage)
+
+  try {
+    const { text: replyText } = await generateRavenReply({
+      apiKey: process.env.ANTHROPIC_API_KEY,
+      bookCase: nextBook,
+      history: [{ role: 'user', content: kickoffPrompt }],
+    })
+    await run('INSERT INTO messages (id, thread_id, role, content, created_at) VALUES (@id, @thread_id, @role, @content, @created_at)',
+      { id: randomUUID(), thread_id: threadId, role: 'raven', content: replyText, created_at: now() })
+    await run('UPDATE threads SET updated_at = @updatedAt WHERE id = @id', { id: threadId, updatedAt: now() })
+    await run('UPDATE book_cases SET status = @status, updated_at = @updatedAt WHERE id = @id', { id: nextBook.id, status: 'AWAITING APPROVAL', updatedAt: now() })
+    await logHandoff(nextBook.id, 'Candidate research kicked off', `Auto-started after Book ${justApproved.number}'s approval — Raven proposed a candidate for Chairman/Chairwoman review`)
+  } catch (err) {
+    await logHandoff(nextBook.id, 'Candidate research kickoff failed', err.message)
+  }
 }
 
 // Story Studio itself keeps no server-side project record (its browser UI only holds
