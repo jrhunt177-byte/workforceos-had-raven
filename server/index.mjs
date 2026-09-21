@@ -351,7 +351,18 @@ async function maybeSeedNextBook(justApprovedBookCaseId) {
     'INSERT INTO threads (id, title, tag, book_case_id, created_at, updated_at) VALUES (@id, @title, @tag, @bookCaseId, @createdAt, @updatedAt)',
     { id: threadId, title: `Book ${String(nextNumber).padStart(2, '0')} — candidate research`, tag: 'Book / Case Research', bookCaseId: nextBook.id, createdAt: ts, updatedAt: ts }
   )
-  const kickoffPrompt = `Book ${justApproved.number} was just approved and is moving into production. Per the Midwest 12-Book Pilot mission, research and propose the next candidate for Book ${nextNumber}: a real, verifiable Midwest unsolved mystery not already used elsewhere in this pilot. Use live web search to ground the proposal in real sources — do not invent details. Give a concise candidate brief: working title, location, date/period, a short synopsis, and your initial source(s), each claim labeled Confirmed/Reported/Disputed/Theory.`
+
+  // A fresh thread has no memory of what earlier books already cover — name them
+  // explicitly, or Raven (working from trained recall, not live search, until she
+  // verifies) will gravitate toward the same famous case every time.
+  const otherCases = await all("SELECT number, case_name, working_title FROM book_cases WHERE (case_name != '' OR working_title != '') AND id != ? ORDER BY number ASC", nextBook.id)
+  const takenList = otherCases.map((c) => `Book ${c.number}: ${c.case_name || c.working_title}`).join('; ')
+
+  const kickoffPrompt = `Book ${justApproved.number} was just approved and is moving into production. Per the Midwest 12-Book Pilot mission, research and propose the next candidate for Book ${nextNumber}: a real, verifiable Midwest unsolved mystery.
+
+Already-assigned cases in this pilot, do not propose any of these again: ${takenList || '(none yet)'}.
+
+Use live web search to ground the proposal in real sources — do not invent details. If live search is unavailable or limited in this reply, say so explicitly and label the whole proposal tentative/unverified rather than presenting it as ready — do not let a search limitation read as confidence. Give a concise candidate brief: working title, location, date/period, a short synopsis, and your initial source(s), each claim labeled Confirmed/Reported/Disputed/Theory.`
   const kickoffMessage = { id: randomUUID(), thread_id: threadId, role: 'user', content: kickoffPrompt, created_at: now() }
   await run('INSERT INTO messages (id, thread_id, role, content, created_at) VALUES (@id, @thread_id, @role, @content, @created_at)', kickoffMessage)
 
