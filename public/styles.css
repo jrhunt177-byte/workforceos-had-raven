@@ -5,9 +5,9 @@
   --border: #2a2a30;
   --text: #e9e6df;
   --text-muted: #9c9890;
-  --gold: #cda43a;
-  --gold-soft: #cda43a22;
-  --gold-dim: #8a7328;
+  --gold: #d8a35a;
+  --gold-soft: #d8a35a22;
+  --gold-dim: #95703e;
   --danger: #b5544a;
   --radius: 10px;
 }
@@ -40,7 +40,7 @@ button, input, textarea, select {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 14px;
+  padding: 12px 14px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
   position: sticky;
@@ -58,11 +58,11 @@ button, input, textarea, select {
   cursor: pointer;
 }
 
-.brand { display: flex; align-items: center; gap: 8px; margin-right: auto; }
-.brand-logo { height: 28px; width: auto; display: block; object-fit: contain; }
-.brand-text { display: flex; flex-direction: column; line-height: 1.1; }
-.brand-name { color: var(--gold); font-weight: 700; letter-spacing: 0.12em; font-size: 0.95rem; }
-.brand-sub { color: var(--text-muted); font-size: 0.72rem; }
+.brand { display: flex; align-items: center; gap: 12px; margin-right: auto; }
+.brand-logo { height: 42px; width: auto; display: block; object-fit: contain; border-radius: 6px; }
+.brand-text { display: flex; flex-direction: column; line-height: 1.15; }
+.brand-name { color: var(--gold); font-weight: 700; letter-spacing: 0.1em; font-size: 1.4rem; }
+.brand-sub { color: var(--text-muted); font-size: 0.85rem; }
 
 .topnav { display: none; gap: 6px; }
 .nav-link {
@@ -200,7 +200,7 @@ button, input, textarea, select {
 }
 .btn:hover { border-color: var(--gold-dim); }
 .btn-gold { background: var(--gold); color: #1a1400; border-color: var(--gold); font-weight: 600; }
-.btn-gold:hover { background: #ddb750; }
+.btn-gold:hover { background: #e0b77e; }
 .btn-outline { background: transparent; border-color: var(--gold-dim); color: var(--gold); }
 .btn-danger { background: transparent; border-color: var(--danger); color: var(--danger); }
 .btn-sm { padding: 6px 10px; font-size: 0.8rem; }
