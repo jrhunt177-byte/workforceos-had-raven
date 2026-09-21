@@ -377,6 +377,15 @@ async function renderBookDetail(id) {
       ` : `
         <div class="muted" style="margin-bottom:10px;">Not locked yet — the decision above is a draft until locked. Locking an Approved decision automatically advances the pipeline and pulls in whatever Raven has already researched.</div>
       `}
+      ${!linkedThreads.length ? `
+        <div class="field">
+          <label>Link a research chat before locking (optional, but Raven can only auto-fill from a linked chat)</label>
+          <select id="f-linkThreadOnLock">
+            <option value="">No chat to link</option>
+            ${state.threads.filter((t) => !t.bookCaseId).map((t) => `<option value="${t.id}">${esc(t.title)} (${esc(t.tag)})</option>`).join('')}
+          </select>
+        </div>
+      ` : ''}
       <div class="grid grid-2">
         <div class="field"><label>Your Name (required to lock)</label><input id="f-approverName" placeholder="e.g. John Hunt" /></div>
         <div class="field" style="display:flex;align-items:flex-end;">
@@ -484,11 +493,13 @@ async function renderBookDetail(id) {
     const decision = $main.querySelector('#f-chairmanDecision').value
     const notes = $main.querySelector('#f-chairmanNotes').value
     const approverName = $main.querySelector('#f-approverName').value.trim()
+    const threadIdEl = $main.querySelector('#f-linkThreadOnLock')
+    const threadId = threadIdEl ? threadIdEl.value : ''
     if (!decision) { alert('Choose a decision (Approved / Rejected / Revise) before locking.'); return }
     if (!approverName) { alert('Enter your name to lock this decision.'); return }
     if (!confirm(`Lock this case as "${decision}" under the name "${approverName}"? ${decision === 'Approved' ? 'This will move the pipeline forward and auto-fill any blank fields from the research chat.' : ''}`)) return
     const updated = await api_.patchBookCase(b.id, collectFormData())
-    const locked = await api_.lockApproval(b.id, { decision, notes, approverName })
+    const locked = await api_.lockApproval(b.id, { decision, notes, approverName, threadId: threadId || undefined })
     const idx = state.bookCases.findIndex((x) => x.id === b.id)
     state.bookCases[idx] = locked
     renderBookDetail(b.id)
