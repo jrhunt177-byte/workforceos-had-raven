@@ -1,0 +1,4 @@
+interface:
+  display_name: "WorkforceOS ECC"
+  short_description: "Preserve context, plan focused changes, verify real outcomes"
+  default_prompt: "Use $workforceos-ecc to continue the authorized WorkforceOS project from verified evidence and finish with a durable receipt."

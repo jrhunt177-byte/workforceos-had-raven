@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "installed_on": "2026-10-03",
+  "source_repository": "https://github.com/affaan-m/ECC",
+  "source_commit": "ef648e01899ba3e8dc6371642deaaf64b4477775",
+  "source_version": "2.2.3",
+  "project_baseline": "60f517a63d51732c096de461c65cc2b200ac47d2",
+  "scope": [
+    "planning",
+    "code review",
+    "security review",
+    "verification",
+    "iterative retrieval",
+    "continuity",
+    "triage adaptation"
+  ],
+  "status": {
+    "source": "installed by containing commit",
+    "host_loaded": "not verified",
+    "exercised": "not verified in this project",
+    "live_verified": "not verified"
+  },
+  "activation": "Use the project instructions and workforceos-ecc skill in a host that has loaded this commit. Existing hosted copies must preserve newer work when incorporating these additive files.",
+  "runtime_changes": "No application behavior, background hooks, provider calls, database changes, access changes, or dependency installation.",
+  "rollback": "Revert only the containing ECC installation commit; preserve subsequent and unrelated work."
+}
