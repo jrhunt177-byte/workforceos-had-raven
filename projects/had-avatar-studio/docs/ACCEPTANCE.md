@@ -1,0 +1,11 @@
+# Acceptance criteria — pre-production
+- [ ] Owner provides and authorizes the use of headshots and voice.
+- [ ] At least three gothic avatar design candidates are reviewed; one approved.
+- [ ] Visual likeness remains intentionally recognizable across variants.
+- [ ] iPad-compatible processing path validated end-to-end (not merely linked).
+- [ ] All tool licenses, model restrictions, costs and privacy policies checked for commercial social content.
+- [ ] Source media stored securely; no sensitive assets placed in this public repo.
+- [ ] A 30-second talking-avatar test produced and approved for voice quality, lip sync, expression and mood.
+- [ ] Publish only with correct rights and suitable AI-generated/synthetic-content disclosures.
+- [ ] Extend to 3–5-minute scripts after pilot acceptance.
+- [ ] Canonical OS Project ID/Field Tile changes only after governance approval and current source-of-truth reconciliation.
